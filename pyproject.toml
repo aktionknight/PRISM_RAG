@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slrag"
+version = "0.1.0"
+description = "Streaming Live RAG — Retrieval Controller"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "spacy>=3.7",
+    "bm25s>=0.2",
+    "PyStemmer>=2.2",
+    "sentence-transformers>=2.2",
+    "pyyaml>=6.0",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
