@@ -1,0 +1,70 @@
+# Facet taxonomy — frozen at the Day-1 AM contract session (C_TEAM_COORDINATION §2).
+# 5–8 facets from a corpus skim; refine later WITHOUT renaming keys (keys are the
+# SubIntent.facet / Claim.facet contract values).
+#
+# Fields
+#   label              human-readable name (answer sectioning, UI)
+#   uncertainty_label  noun phrase used in Component 4 uncertainty sentences
+#   retrieval_family   policy | descriptive  -> facet-routed RRF weights (retrieval.yaml, S-8)
+#   keywords           lexical cues for facet tagging / pool-first resolution
+#   constraint_slots   session constraints (synth.yaml delta.slots) that claims of this
+#                      facet depend on; drives Claim.preconditions + impact analysis
+
+version: 1
+
+facets:
+  venue_capacity:
+    label: Venue capacity
+    uncertainty_label: Venue capacity details
+    retrieval_family: descriptive
+    keywords: [capacity, seats, holds, accommodate, people, attendees, layout, venue]
+    constraint_slots: [headcount, city]
+
+  venue_pricing:
+    label: Pricing and payment
+    uncertainty_label: Pricing details
+    retrieval_family: policy
+    keywords: [price, pricing, cost, charges, rate, fee, deposit, payment, inr, usd]
+    constraint_slots: [city]
+
+  cancellation_terms:
+    label: Cancellation and refund terms
+    uncertainty_label: Cancellation and refund terms
+    retrieval_family: policy
+    keywords: [cancellation, cancel, cancellations, refund, refunds, forfeit, deposit, notice]
+    constraint_slots: []
+
+  catering_options:
+    label: Catering options
+    uncertainty_label: Catering accommodation policies
+    retrieval_family: descriptive
+    keywords: [catering, caterers, caterer, food, meals, menu, on-site, external]
+    constraint_slots: [headcount]
+
+  travel_reimbursement:
+    label: Travel reimbursement
+    uncertainty_label: Travel reimbursement rules
+    retrieval_family: policy
+    keywords: [reimbursement, reimbursed, reimburse, travel, trip, trips, airfare, hotel, per-diem, allowance]
+    constraint_slots: [trip_type, booking_timing]
+
+  approval_requirements:
+    label: Approval requirements
+    uncertainty_label: Approval requirements
+    retrieval_family: policy
+    keywords: [approval, approved, pre-approved, authorise, authorize, director, manager, head, sign-off]
+    constraint_slots: [trip_type, booking_timing]
+
+  expense_documentation:
+    label: Expense documentation and payment
+    uncertainty_label: Expense documentation requirements
+    retrieval_family: policy
+    keywords: [receipts, receipt, itemised, invoice, documentation, claims, payroll, submitted, filed]
+    constraint_slots: []
+
+  logistics:
+    label: Logistics and access
+    uncertainty_label: Logistics details
+    retrieval_family: descriptive
+    keywords: [parking, transport, access, av, projector, wifi, directions, location, breakout]
+    constraint_slots: [city]

@@ -1,0 +1,131 @@
+# Component 4 — Session Refinement & Corpus Grounding (owner: Sivansh)
+# All thresholds, lexicons and templates live here (HC-2: nothing hardcoded in src/).
+version: 1
+
+# ---------------------------------------------------------------------------
+# Generator (synth/generator.py) — the single synthesis LLM call per turn (HC-5)
+# ---------------------------------------------------------------------------
+generator:
+  backend: extractive                 # extractive | openai_compatible
+  prompts_dir: config/prompts         # relative to repo root
+  templates:
+    synthesize: synthesize.jinja      # NEW_INTENT turns
+    refine: refine.jinja              # CONSTRAINT_REFINEMENT delta synthesis
+    present_only: present_only.jinja  # PRESENTATION_ONLY (optional LLM restyle)
+  openai_compatible:                  # Qwen2.5-7B-Instruct via local Ollama/vLLM (HC-1: local only)
+    base_url: http://localhost:11434/v1
+    model: qwen2.5:7b-instruct
+    api_key_env: SLRAG_LLM_API_KEY    # optional; local Ollama needs none
+    temperature: 0.0
+    max_tokens: 700
+    timeout_s: 30
+    json_schema_mode: true            # S-6 layer 2: citations constrained to the allowlist enum
+  extractive:                         # deterministic, offline backend (CI / golden replay)
+    min_chunk_score: 0.5              # evidence below this rerank score is not used for claims
+    max_claims_per_intent: 3
+    min_relevance: 0.15               # min content-token overlap of a sentence with query + facet keywords
+
+# ---------------------------------------------------------------------------
+# Verifier (synth/verifier.py) — S-6 allowlist backstop + S-5 two-pass streaming
+# ---------------------------------------------------------------------------
+verifier:
+  entailment_backend: lexical         # lexical | cross_encoder
+  entailment_threshold: 0.6           # cited chunk |= sentence
+  copy_check: true                    # numerals/dates/currency/entities must appear in a cited chunk
+  reattribute_on_failure: true        # try other in-context chunks before retracting
+  regenerate_on_retract: false        # HC-5: regeneration would exceed the <=3 LLM calls/turn budget
+  cross_encoder:
+    model_path: models/nli-deberta-v3-small   # baked at build time; never lazily downloaded (G1)
+    labels: [contradiction, entailment, neutral]
+    max_length: 256
+  stopwords: [a, an, the, and, or, of, to, in, on, for, with, by, at, from, is, are, was,
+              were, be, been, being, it, its, this, that, these, those, as, per, up, than,
+              more, less, into, only, all, any, can, may, will, must, shall, should, not, no,
+              do, does, did, has, have, had, their, there, which, who, whom, what, when,
+              where, how, i, you, we, they, he, she, my, your, our]
+
+# ---------------------------------------------------------------------------
+# Coverage matrix -> uncertainty (synth/uncertainty.py) — S-10
+# ---------------------------------------------------------------------------
+uncertainty:
+  coverage_floor: 0.4                 # best rerank score below this and no claim -> uncovered
+  ambiguity_margin: 0.05              # top-2 evidence docs within this margin and no claim -> ambiguous
+  entity_patterns:                    # anchor entities for entity x facet partial-coverage gaps
+    - '\b(?:Venue|Hotel|Hall|Centre|Center|Campus|Office) [A-Z0-9]\b'
+  templates:
+    uncovered: "{facet_label} could not be verified from the retrieved corpus."
+    entity_gap: "{facet_label} for {entity} could not be verified from the retrieved corpus."
+    clarification: "Could you clarify whether you mean {option_a} or {option_b}?"
+    full_coverage_caveat: ""          # brief prefers an honest caveat; empty keeps it silent
+
+# ---------------------------------------------------------------------------
+# Delta engine (synth/delta.py) — S-4 turn classifier, constraint slots, impact analysis
+# ---------------------------------------------------------------------------
+delta:
+  pool_resolution_min_score: 0.5      # pool chunk must score >= this to resolve a target with 0 retrievals
+  query_templates:                    # fallback when a slot value has no explicit query
+    query_nl: "{facet_label} for {value_phrase}"
+    search_string: "{value_phrase} {facet_label}"
+  refinement_cues:                    # extra lexical cues that a turn refines the prior answer
+    - '\bactually\b'
+    - '\binstead\b'
+    - '\bturns out\b'
+    - '\bi forgot to mention\b'
+    - '\bit was\b'
+    - '\bthe trip was\b'
+    - '\bmake it\b'
+    - '\bchange (?:it|that) to\b'
+  slots:
+    trip_type:
+      values:
+        international:
+          patterns: ['\binternational\b', '\boverseas\b', '\babroad\b']
+          value_phrase: international travel
+          query_nl: international travel reimbursement exception
+          search_string: international travel reimbursement exception
+        domestic:
+          patterns: ['\bdomestic\b', '\bwithin (?:the )?country\b']
+          value_phrase: domestic travel
+    booking_timing:
+      values:
+        post_travel:
+          patterns: ['\b(?:booked|booking|bought|purchased) after (?:the )?(?:travel|trip)\b',
+                     '\bafter travel\b', '\bpost[- ]travel\b', '\bretroactive(?:ly)?\b']
+          value_phrase: post-travel booking
+          facet: approval_requirements
+          query_nl: post-travel booking approval requirement
+          search_string: post-travel booking approval requirement
+        advance:
+          patterns: ['\bin advance\b', '\bbefore (?:the )?(?:travel|trip)\b', '\bbooked (?:early|ahead)\b']
+          value_phrase: advance booking
+    headcount:
+      numeric_patterns:
+        - '\b(?:for|of|to|with|be)\s+(\d{1,5})\s+(?:people|persons|attendees|guests|participants|delegates)\b'
+        - '\b(\d{1,5})[- ](?:person|people|attendee|seat)\b'
+      value_phrase: "{value} attendees"
+    city:
+      values:
+        pune: {patterns: ['\bpune\b'], value_phrase: Pune}
+        mumbai: {patterns: ['\bmumbai\b'], value_phrase: Mumbai}
+        bengaluru: {patterns: ['\bbengaluru\b', '\bbangalore\b'], value_phrase: Bengaluru}
+        delhi: {patterns: ['\bdelhi\b', '\bnew delhi\b'], value_phrase: Delhi}
+
+# ---------------------------------------------------------------------------
+# Presentation-only path (synth/renderer.py + turn classifier) — Example 3
+# ---------------------------------------------------------------------------
+presentation:
+  verbs: [repeat, restate, shorten, shorter, summarise, summarize, condense, rephrase, reword,
+          bullet, bullets, bulleted, list, numbered, translate, simplify, tone, format, briefly]
+  anaphora: ['\bthat\b', '\bthis\b', '\bit\b', '\byour (?:last )?answer\b', '\bthe above\b',
+             '\bwhat you (?:just )?said\b', '\bthe previous answer\b']
+  number_words: {one: 1, two: 2, three: 3, four: 4, five: 5, six: 6}
+  reasons:                             # suppression_reason values (02_SOLUTION_DESIGN presentation enum)
+    default: presentation_restructure
+    translate: translation
+    tone: tone_change
+
+renderer:
+  claim_separator: " "
+  bullet_prefix: "- "
+  numbered_format: "{n}. "
+  short_max_claims_per_facet: 1        # "shorten" keeps the top claim per facet

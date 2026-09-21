@@ -1,0 +1,130 @@
+{
+  "_doc": "Golden Examples 1-3 (brief). Streams are schema-valid TranscriptChunk JSONL; turns end at is_final=true. 'evidence' maps intent_id -> [[chunk_id, rerank_score], ...] from fixture_chunks.jsonl (what Aakrit's retriever would return). 'delta_evidence' maps a targeted delta query's search_string -> [[chunk_id, score], ...]. 'expected' is what Component 4 must reproduce.",
+
+  "example1_multi_intent": {
+    "stream": "golden_example.jsonl",
+    "turns": [
+      {
+        "turn_id": 1,
+        "utterance": "I need to plan a workshop for 30 people in Pune, which venues can hold that, and what are the cancellation terms and catering options for those venues?",
+        "t_s_end": 2.1,
+        "controller_decisions": [
+          {"t_s": 0.0, "decision": "WAIT", "reason": "intent_unstable", "confidence": 0.31},
+          {"t_s": 0.8, "decision": "RETRIEVE", "reason": "corpus_discriminative", "confidence": 0.78}
+        ],
+        "sub_intents": [
+          {"intent_id": "i1", "facet": "venue_capacity", "query_nl": "venue capacity for 30 attendees in Pune", "search_string": "Pune workshop venue capacity 30", "novel": true},
+          {"intent_id": "i2", "facet": "cancellation_terms", "query_nl": "cancellation terms and refund policies", "search_string": "cancellation policy workshop venues Pune", "novel": true},
+          {"intent_id": "i3", "facet": "catering_options", "query_nl": "on-site and external catering options", "search_string": "catering service options workshop Pune", "novel": true}
+        ],
+        "evidence": {
+          "i1": [["Doc_12#2#0", 0.91], ["Doc_12#3#0", 0.42]],
+          "i2": [["Doc_31#4#0", 0.84]],
+          "i3": [["Doc_09#1#0", 0.66]]
+        },
+        "retrieval_events": [
+          {"timestamp_s": 0.8, "query": "Pune workshop venue capacity 30", "trigger": "provisional"},
+          {"timestamp_s": 1.6, "query": "cancellation policy workshop venues Pune", "trigger": "multi_intent"},
+          {"timestamp_s": 1.6, "query": "catering service options workshop Pune", "trigger": "multi_intent"}
+        ],
+        "expected": {
+          "turn_type": "NEW_INTENT",
+          "answer_version": 1,
+          "sub_queries": [
+            "venue capacity for 30 attendees in Pune",
+            "cancellation terms and refund policies",
+            "on-site and external catering options"
+          ],
+          "citations": ["Doc_12 §2", "Doc_31 §4", "Doc_09 §1"],
+          "uncertainty": "Catering accommodation policies for Venue A could not be verified from the retrieved corpus.",
+          "facets_covered": ["venue_capacity", "cancellation_terms", "catering_options"],
+          "retrieval_events_count": 3
+        }
+      }
+    ]
+  },
+
+  "example2_refinement": {
+    "stream": "golden_example2_refinement.jsonl",
+    "turns": [
+      {
+        "turn_id": 1,
+        "utterance": "How does travel reimbursement work for my business trip, and what documents do I need to submit?",
+        "t_s_end": 0.8,
+        "controller_decisions": [],
+        "sub_intents": [
+          {"intent_id": "i1", "facet": "travel_reimbursement", "query_nl": "travel reimbursement rules for a business trip", "search_string": "business trip travel reimbursement policy", "novel": true},
+          {"intent_id": "i2", "facet": "expense_documentation", "query_nl": "documents required to submit a reimbursement claim", "search_string": "reimbursement claim receipts documentation", "novel": true}
+        ],
+        "evidence": {
+          "i1": [["Doc_44#2#0", 0.88], ["Doc_44#3#0", 0.81]],
+          "i2": [["Doc_44#5#0", 0.79], ["Doc_44#6#0", 0.62]]
+        },
+        "retrieval_events": [
+          {"timestamp_s": 0.0, "query": "business trip travel reimbursement policy", "trigger": "provisional"},
+          {"timestamp_s": 0.8, "query": "reimbursement claim receipts documentation", "trigger": "multi_intent"}
+        ],
+        "expected": {
+          "turn_type": "NEW_INTENT",
+          "answer_version": 1,
+          "citations": ["Doc_44 §2", "Doc_44 §3", "Doc_44 §5", "Doc_44 §6"],
+          "claims_active": 4
+        }
+      },
+      {
+        "turn_id": 2,
+        "utterance": "The trip was international and booked after travel.",
+        "t_s_end": 0.9,
+        "controller_decisions": [],
+        "sub_intents": [],
+        "evidence": {},
+        "retrieval_events": [],
+        "delta_evidence": {
+          "international travel reimbursement exception": [["Doc_44#7#0", 0.86]],
+          "post-travel booking approval requirement": [["Doc_47#2#0", 0.83]]
+        },
+        "expected": {
+          "turn_type": "CONSTRAINT_REFINEMENT",
+          "answer_version": 2,
+          "constraint_delta": {"trip_type": "international", "booking_timing": "post_travel"},
+          "refinement": {
+            "event": "answer_refined", "from_version": 1, "to_version": 2,
+            "claims_retained": 3, "claims_superseded": 1, "claims_added": 2,
+            "delta_queries_issued": 2, "full_corpus_searches": 0, "session_cleared": false
+          },
+          "citations_preserved": ["Doc_44 §2", "Doc_44 §5", "Doc_44 §6"],
+          "citations_added": ["Doc_44 §7", "Doc_47 §2"],
+          "sub_queries": ["international travel reimbursement exception", "post-travel booking approval requirement"],
+          "retrieval_triggers": ["late_constraint", "late_constraint"]
+        }
+      }
+    ]
+  },
+
+  "example3_presentation": {
+    "stream": "golden_example3_presentation.jsonl",
+    "session_prefix": "example1_multi_intent",
+    "turns": [
+      {
+        "turn_id": 2,
+        "utterance": "Can you repeat that in two bullets?",
+        "t_s_end": 0.7,
+        "controller_decisions": [
+          {"t_s": 0.7, "decision": "NO_RETRIEVAL", "reason": "presentation_restructure", "confidence": 0.97}
+        ],
+        "sub_intents": [],
+        "evidence": {},
+        "retrieval_events": [],
+        "expected": {
+          "turn_type": "PRESENTATION_ONLY",
+          "answer_version": 1,
+          "retrieval_events_count": 0,
+          "retrieval_required": false,
+          "suppression_reason": "presentation_restructure",
+          "bullet_count": 2,
+          "citations_subset_of_prior": true
+        }
+      }
+    ]
+  }
+}
