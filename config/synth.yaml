@@ -3,6 +3,17 @@
 version: 1
 
 # ---------------------------------------------------------------------------
+# Shared lexical utilities (synth/text.py) — used by generator, verifier, delta
+# ---------------------------------------------------------------------------
+text:
+  stopwords: [a, an, the, and, or, of, to, in, "on", for, with, by, at, from, is, are, was,
+              were, be, been, being, it, its, this, that, these, those, as, per, up, than,
+              more, less, into, only, all, any, can, may, will, must, shall, should, not, "no",
+              do, does, did, has, have, had, their, there, which, who, whom, what, when,
+              where, how, i, you, we, they, he, she, my, your, our, me, us, need, want,
+              like, about, also, so, if, then, just, please]
+
+# ---------------------------------------------------------------------------
 # Generator (synth/generator.py) — the single synthesis LLM call per turn (HC-5)
 # ---------------------------------------------------------------------------
 generator:
@@ -38,11 +49,6 @@ verifier:
     model_path: models/nli-deberta-v3-small   # baked at build time; never lazily downloaded (G1)
     labels: [contradiction, entailment, neutral]
     max_length: 256
-  stopwords: [a, an, the, and, or, of, to, in, on, for, with, by, at, from, is, are, was,
-              were, be, been, being, it, its, this, that, these, those, as, per, up, than,
-              more, less, into, only, all, any, can, may, will, must, shall, should, not, no,
-              do, does, did, has, have, had, their, there, which, who, whom, what, when,
-              where, how, i, you, we, they, he, she, my, your, our]
 
 # ---------------------------------------------------------------------------
 # Coverage matrix -> uncertainty (synth/uncertainty.py) — S-10
