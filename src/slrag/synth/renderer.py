@@ -11,10 +11,11 @@ shape. This module imports nothing from ``slrag.retrieve`` / ``slrag.decompose``
 closure), so the corpus is structurally unreachable from here, and
 ``render_presentation`` hard-asserts ``citations(new) ⊆ citations(prior)``.
 
-Translation and tone changes cannot be done deterministically: they fall back to a
-prose re-render of the same claims while keeping their suppression reason
-(``translation`` / ``tone_change``). An optional LLM restyle via the generator's
-``present_only`` prompt is the engine's decision, not this module's (HC-5).
+Translation and tone changes cannot be done deterministically. With an LLM backend
+the engine restyles the claims (one ``present_only`` call, HC-5), verifies the result
+and passes it in as ``claims``; otherwise, or if verification fails, they fall back
+to a prose re-render of the same claims while keeping their suppression reason
+(``translation`` / ``tone_change``).
 
 Separators, prefixes, verb lexicons and reasons come from ``config/synth.yaml``
 ``renderer:`` / ``presentation:`` (HC-2); code values are fallbacks for missing keys.
@@ -134,13 +135,15 @@ def render_presentation(
     *,
     prior_citations: Sequence[str],
     config: dict | None = None,
+    claims: Sequence[Claim] | None = None,
 ) -> tuple[str, list[str]]:
-    """Re-render ONLY ``graph.active()``; never touches the corpus or mutates the graph.
+    """Re-render ONLY ``graph.active()`` (or ``claims``, restyled versions of them);
+    never touches the corpus or mutates the graph.
 
     Raises PresentationInvariantError unless ``citations(new) ⊆ citations(prior)``,
     checked over the claims' citations and every marker in the rendered text.
     """
-    claims = graph.active()
+    claims = graph.active() if claims is None else list(claims)
     text = render_claims(claims, style=request.style, bullets=request.bullets, config=config)
     cited = [normalize_label(label) or label for label in answer_citations(claims)]
     for _, labels in find_markers(text):

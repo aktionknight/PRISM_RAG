@@ -139,6 +139,7 @@ presentation:
     default: presentation_restructure
     translate: translation
     tone: tone_change
+  llm_restyle_reasons: [translation, tone_change]   # LLM backend only: one verified present_only call; else prose
 
 renderer:
   claim_separator: " "

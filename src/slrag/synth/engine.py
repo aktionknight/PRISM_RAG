@@ -8,7 +8,8 @@ routes each turn with ``classify()`` before decomposition. Per turn:
     classify ─┬─ NEW_INTENT            → generate → two-pass verify → graph revision
               ├─ CONSTRAINT_REFINEMENT → delta plan → pool-first / targeted queries
               │                          → generate(refine) → verify → delta apply
-              └─ PRESENTATION_ONLY     → re-render active claims (no retrieval path)
+              └─ PRESENTATION_ONLY     → re-render active claims (no retrieval path);
+                                         translation/tone: one verified LLM restyle
     → coverage matrix → uncertainty → AnswerOutput (+ additive extensions)
 
 LLM budget (HC-5): at most one generator call per turn from this component; the
@@ -25,6 +26,7 @@ from typing import Any, AsyncIterator, Iterable, Mapping, Sequence
 
 from slrag.core.schemas import (
     AnswerOutput,
+    Claim,
     ControllerDecision,
     RetrievedChunk,
     SubIntent,
@@ -56,7 +58,7 @@ from slrag.synth.types import (
     VersionLineage,
 )
 from slrag.synth.uncertainty import CoverageMatrix
-from slrag.synth.verifier import CitationAllowlist, ClaimVerifier, TwoPassStreamer, make_scorer
+from slrag.synth.verifier import CitationAllowlist, ClaimVerifier, TwoPassStreamer, copy_check, make_scorer
 
 COMPONENT = "synthesis"
 
@@ -117,6 +119,8 @@ class SynthesisEngine:
         self.retrieve_fn = retrieve_fn
         self.pool = pool
         self.scorer = scorer if scorer is not None else make_scorer(self.config)
+        presentation = self.config.get("presentation", {}) or {}
+        self._restyle_reasons = frozenset(map(str, presentation.get("llm_restyle_reasons", ()) or ()))
         self.session_constraints: dict[str, str] = {}
         self._intents: dict[str, SubIntent] = {}
         self._intent_evidence: dict[str, list[RetrievedChunk]] = {}
@@ -169,7 +173,7 @@ class SynthesisEngine:
         )
 
         if classification.turn_type == "PRESENTATION_ONLY":
-            yield self._present(turn, classification, telemetry)
+            yield await self._present(turn, classification, telemetry)
             return
         if classification.turn_type == "CONSTRAINT_REFINEMENT":
             path = self._refine(turn, classification, telemetry)
@@ -307,15 +311,22 @@ class SynthesisEngine:
             refinement=report,
         )
 
-    def _present(self, turn: TurnInput, classification: TurnClassification, telemetry: _Telemetry) -> SynthesisResult:
+    async def _present(
+        self, turn: TurnInput, classification: TurnClassification, telemetry: _Telemetry
+    ) -> SynthesisResult:
         """Presentation-only: claim list in, prose out. No retriever is reachable from here."""
         started = time.perf_counter()
         request = parse_presentation_request(turn.utterance, self.config)
+        restyled, restyle, usage = None, None, GenerationUsage()
+        if request.reason in self._restyle_reasons and callable(getattr(self.generator, "restyle", None)):
+            restyled, restyle = await self._restyle(turn.utterance)
+            usage = self.generator.usage
         answer, citations = render_presentation(
-            self.graph, request, prior_citations=self.graph.citations(), config=self.config
+            self.graph, request, prior_citations=self.graph.citations(), config=self.config, claims=restyled
         )
         telemetry.add("render", _ms(started), {"style": request.style, "bullets": request.bullets,
-                                                "retrieval_required": False})
+                                                "retrieval_required": False, "restyle": restyle,
+                                                "llm_calls": usage.llm_calls})
         output = build_answer_output(
             session_id=self.session_id,
             turn_id=turn.turn_id,
@@ -345,10 +356,44 @@ class SynthesisEngine:
             coverage=[],
             lineage=None,
             refinement=None,
-            usage=GenerationUsage(),
+            usage=usage,
             telemetry=telemetry.events,
             fabricated_id_count=_fabricated(citations, self.graph.known_labels()),
         )
+
+    async def _restyle(self, instruction: str) -> tuple[list[Claim] | None, str]:
+        """One LLM call (HC-5) rewriting the active claims for a translation/tone turn.
+
+        All-or-nothing: every sentence must cite only the prior answer's labels and
+        copy its numbers and names from the claims it restates, and together the
+        sentences must still cite every prior label. Anything less returns None and
+        the caller re-renders deterministically, so a restyle can never drop or
+        invent content. Returns (claims or None, outcome for telemetry).
+        """
+        active = self.graph.active()
+        prior = answer_citations(active)
+        drafts = [draft async for draft in self.generator.restyle(active, instruction)]
+        if not drafts:
+            return None, "fallback:no_output"
+        allowlist = CitationAllowlist.from_chunks(
+            chunk for label in prior for chunk in self.graph.chunks_for_label(label)
+        )
+        restyled: list[Claim] = []
+        for draft in drafts:
+            text, in_text, in_text_fabricated = allowlist.strip_markers(draft.text)
+            kept, fabricated = allowlist.filter((*draft.citations, *in_text, *in_text_fabricated))
+            if fabricated or not kept or not text:
+                return None, "fallback:citation_outside_prior"
+            sources = [claim.text for claim in active if set(claim.citations) & set(kept)]
+            if copy_check(text, sources):
+                return None, "fallback:copy_check_failed"
+            restyled.append(
+                Claim(claim_id=f"r{len(restyled) + 1}", facet=draft.facet, text=text, citations=list(kept),
+                      preconditions={}, status="active", introduced_in_version=self.graph.version)
+            )
+        if set(prior) - {label for claim in restyled for label in claim.citations}:
+            return None, "fallback:content_dropped"
+        return restyled, "llm"
 
     # -- helpers ---------------------------------------------------------------
     def _verification(self, evidence: Mapping[str, Sequence[RetrievedChunk]]) -> tuple[ClaimVerifier, TwoPassStreamer]:

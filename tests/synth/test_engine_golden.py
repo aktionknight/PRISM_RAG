@@ -17,6 +17,7 @@ from slrag.core.schemas import AnswerOutput, TelemetryEvent
 from slrag.core.session import SessionStore
 from slrag.synth.engine import SynthesisEngine, TurnInput
 from slrag.synth.generator import LLMGenerator, LLMResponse
+from slrag.synth.renderer import render_claims
 from tests.helpers import (
     FixtureRetriever,
     load_scenarios,
@@ -237,3 +238,71 @@ async def test_pre_decomposition_routing_reproduces_every_golden_scenario(name):
     if name == "example2_refinement":
         # The refinement turn skipped upstream entirely: its only searches are the 2 targeted ones.
         assert [q.search_string for q in retriever.calls] == turns[1]["expected"]["sub_queries"]
+
+
+class RestyleLLM:
+    """Local-LLM stand-in for the present_only call; ``make`` builds the reply from the active claims."""
+
+    def __init__(self, make) -> None:
+        self.make, self.calls = make, 0
+
+    async def complete(self, prompt: str, *, json_schema=None) -> LLMResponse:
+        self.calls += 1
+        claims = self.make(self.active)
+        text = claims if isinstance(claims, str) else json.dumps({"claims": claims})
+        return LLMResponse(text=text, prompt_tokens=300, completion_tokens=80)
+
+
+def _restated(claims, edit=lambda text: f"{text[:-1]} (translated)."):
+    return [{"intent_id": None, "facet": c.facet, "text": edit(c.text), "citations": list(c.citations)}
+            for c in claims]
+
+
+async def _presentation_turn(llm: RestyleLLM, utterance: str, reason: str):
+    engine, _, _, (v1,) = await _run("example1_multi_intent")
+    llm.active = engine.graph.active()
+    engine.generator = LLMGenerator(llm)
+    engine.retrieve_fn = ExplodingRetriever()
+    decision = {"t_s": 0.9, "decision": "NO_RETRIEVAL", "reason": reason, "confidence": 0.95}
+    turn = {"turn_id": 2, "utterance": utterance, "t_s_end": 0.9, "retrieval_events": [],
+            "controller_decisions": [decision]}
+    v2 = await engine.handle_turn(_turn_input(turn))
+    render = next(e for e in v2.telemetry if e.component == "synthesis.render")
+    return engine, llm, v1, v2, render.payload
+
+
+async def test_translation_turn_uses_one_verified_llm_restyle():
+    engine, llm, v1, v2, render = await _presentation_turn(
+        RestyleLLM(_restated), "Can you translate that into Hindi?", "translation")
+
+    assert v2.turn_type == "PRESENTATION_ONLY" and render["restyle"] == "llm"
+    assert llm.calls == 1 and v2.usage.llm_calls == 1                         # HC-5: one call
+    assert v2.output.answer.count("(translated)") == len(engine.graph.active())
+    assert v2.output.citations == v1.output.citations                        # same sources, subset by construction
+    assert v2.output.retrieval_events == [] and v2.extensions["suppression_reason"] == "translation"
+    assert v2.output.answer_version == 1 and v2.extensions["claims"] == v1.extensions["claims"]  # graph untouched
+    _assert_contract(v2)
+
+
+@pytest.mark.parametrize("make, outcome", [
+    (lambda active: _restated(active[:1]) + [{**row, "citations": ["Doc_77 §9"]} for row in _restated(active[1:])],
+     "fallback:citation_outside_prior"),
+    (lambda active: _restated(active, lambda t: t.replace("40", "400")), "fallback:copy_check_failed"),
+    (lambda active: _restated(active[:1]), "fallback:content_dropped"),
+    (lambda active: "Sorry, I cannot help with that.", "fallback:no_output"),
+])
+async def test_ungrounded_restyle_falls_back_to_the_deterministic_render(make, outcome):
+    engine, llm, _, v2, render = await _presentation_turn(
+        RestyleLLM(make), "Say that again in a friendlier tone.", "tone_change")
+
+    assert render["restyle"] == outcome and llm.calls == 1
+    assert v2.output.answer == render_claims(engine.graph.active(), config=engine.config)
+    assert "(translated)" not in v2.output.answer and "Doc_77" not in v2.output.answer
+    _assert_contract(v2)
+
+
+async def test_restructure_requests_never_call_the_llm():
+    _, llm, _, v2, render = await _presentation_turn(
+        RestyleLLM(_restated), "Can you repeat that in two bullets?", "presentation_restructure")
+    assert llm.calls == 0 and v2.usage.llm_calls == 0 and render["restyle"] is None
+    assert len(v2.output.answer.splitlines()) == 2
