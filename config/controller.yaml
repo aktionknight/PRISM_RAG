@@ -1,0 +1,34 @@
+# Controller thresholds — calibrated via dev sweep (Phase 2 task 2.9)
+# Never hardcoded in application code (HC-2)
+
+cascade:
+  # Stage 2: Corpus discriminativeness probe (BM25)
+  tau_hi: 0.35               # margin above this → RETRIEVE
+  tau_lo: 0.10               # margin below this → WAIT
+  h_lo: 0.60                 # entropy below this (with margin > tau_hi) → RETRIEVE
+
+  # Stage 3: Embedding stability
+  epsilon: 0.15              # drift below this → intent stabilised
+  min_content_anchors: 2     # required for Stage 3 to fire
+
+  # Refractory period
+  refractory_ms: 250         # no re-RETRIEVE within this window unless new anchor
+
+  # Stage 0: Suppression
+  presentation_verbs:
+    - repeat
+    - shorten
+    - rephrase
+    - bullets
+    - translate
+    - summarize
+    - tone
+
+  # Self-correction markers (speculation cancellation)
+  correction_markers:
+    - "actually"
+    - "no wait"
+    - "sorry, I meant"
+    - "scratch that"
+    - "I mean"
+    - "correction"

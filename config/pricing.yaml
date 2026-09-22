@@ -1,0 +1,20 @@
+# Pricing table for LLM cost tracking (Component 5 — Matangi)
+# Used to compute cost_usd per turn/component/session
+
+models:
+  "qwen2.5-7b-instruct":
+    prompt_per_1k_tokens: 0.0005
+    completion_per_1k_tokens: 0.0015
+
+  "qwen2.5-0.5b":
+    prompt_per_1k_tokens: 0.0001
+    completion_per_1k_tokens: 0.0003
+
+# Embedding/reranker costs (proxy — counted by items processed)
+embedding:
+  model: "bge-small-en-v1.5"
+  cost_per_1k_items: 0.0001
+
+reranker:
+  model: "bge-reranker-base"
+  cost_per_1k_items: 0.0005

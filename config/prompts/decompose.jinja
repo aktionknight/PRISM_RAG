@@ -1,0 +1,37 @@
+{# decompose.jinja — LLM prompt for multi-intent decomposition (C2) #}
+{# Aakrit owns this template. All prompts live in config/ per HC-2. #}
+
+You are an intent decomposition engine for a streaming RAG system.
+
+Given the current transcript prefix, decompose it into distinct, self-contained sub-queries.
+
+## Rules
+1. Each sub-query must be SELF-CONTAINED — resolve all pronouns, ellipsis, and anaphora.
+2. Assign each sub-query a FACET from: {{ facets | join(', ') }}
+3. Do NOT split tightly coupled concepts (e.g. "cancellation and refund terms" is ONE intent).
+4. DO split genuinely different information needs (e.g. "venue capacity" vs "catering options").
+5. Generate an optimised search_string for each sub-query (keywords, not a sentence).
+
+## Current Transcript Prefix
+{{ prefix }}
+
+{% if existing_intents %}
+## Already Identified Intents (do NOT duplicate these)
+{% for intent in existing_intents %}
+- [{{ intent.facet }}] {{ intent.query_nl }}
+{% endfor %}
+{% endif %}
+
+## Output Format (strict JSON)
+```json
+{
+  "sub_intents": [
+    {
+      "facet": "<facet_key>",
+      "query_nl": "<self-contained natural language query>",
+      "search_string": "<optimised search keywords>",
+      "novel": true
+    }
+  ]
+}
+```

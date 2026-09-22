@@ -1,0 +1,69 @@
+# Retrieval configuration — facet-routed hybrid weighting (S-8)
+
+rrf:
+  k: 60                          # RRF constant
+
+top_k:
+  sparse: 50                     # BM25 top-k per sub-query
+  dense: 50                      # FAISS top-k per sub-query
+  fused: 30                      # candidates for cross-encoder rerank
+  final: 8                       # chunks per sub-query after rerank
+
+# Facet-specific BM25/dense weight routing
+# Policy/terms/eligibility → boost sparse (exact-match language)
+# Descriptive/comparison/logistics → boost dense (paraphrase-heavy)
+facet_weights:
+  venue_capacity:
+    bm25: 0.4
+    dense: 0.6
+  cancellation_terms:
+    bm25: 0.7
+    dense: 0.3
+  pricing:
+    bm25: 0.7
+    dense: 0.3
+  catering_options:
+    bm25: 0.4
+    dense: 0.6
+  logistics:
+    bm25: 0.3
+    dense: 0.7
+  eligibility:
+    bm25: 0.7
+    dense: 0.3
+  procedure:
+    bm25: 0.6
+    dense: 0.4
+  comparison:
+    bm25: 0.3
+    dense: 0.7
+  default:
+    bm25: 0.5
+    dense: 0.5
+
+# Context assembly
+context:
+  budget_tokens: 3000
+  guaranteed_chunks_per_intent: 2
+  mmr_lambda: 0.7                # diversity trade-off within facet
+  dedup_cosine_threshold: 0.95   # near-duplicate chunk detection
+
+# Contradiction gating
+contradiction:
+  nli_threshold: 0.7             # contradiction probability to confirm
+
+# Embedding model
+embedding:
+  model_name: "BAAI/bge-small-en-v1.5"
+  dimension: 384
+
+# Reranker model
+reranker:
+  model_name: "BAAI/bge-reranker-base"
+
+# Index paths
+index:
+  sparse_path: ".index/bm25"
+  dense_path: ".index/faiss"
+  metadata_path: ".index/metadata.json"
+  chunks_path: ".index/chunks.jsonl"

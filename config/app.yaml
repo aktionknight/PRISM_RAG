@@ -1,0 +1,20 @@
+# Application-level configuration
+# Feature flags for stub vs. real modules (C_TEAM_COORDINATION §3)
+
+modules:
+  use_stub_controller: true      # Diya swaps to false when ready
+  use_stub_decomposer: true      # Aakrit swaps to false when ready
+  use_stub_retriever: true        # Aakrit swaps to false when ready
+  use_stub_synthesizer: true      # Sivansh swaps to false when ready
+
+session:
+  ttl_seconds: 3600              # 1 hour
+  max_concurrent_sessions: 10
+
+engine:
+  max_llm_calls_per_turn: 3     # HC-5: parsimony constraint
+  refractory_ms: 250             # Controller refractory period
+
+server:
+  host: "0.0.0.0"
+  port: 8000

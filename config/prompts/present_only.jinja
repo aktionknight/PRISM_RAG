@@ -1,0 +1,19 @@
+{# present_only.jinja — LLM prompt for presentation-only turns (Example 3) #}
+{# Sivansh owns this template. #}
+
+You are reformatting an existing answer. NO new information retrieval has occurred.
+You must use ONLY the claims and citations already present.
+
+## Current Answer Claims
+{% for claim in active_claims %}
+- {{ claim.text }} {{ claim.citations }}
+{% endfor %}
+
+## User Request
+{{ user_request }}
+
+## Instructions
+1. Reformat/restructure the answer as requested (bullets, shorter, different tone, etc.)
+2. You MUST NOT add any new facts, claims, or citations.
+3. Every citation in your output MUST come from the claims above — no additions.
+4. If the user asked to translate, translate the content while preserving all citations.

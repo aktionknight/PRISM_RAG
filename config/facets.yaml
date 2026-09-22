@@ -1,0 +1,47 @@
+# Facet taxonomy — derived from corpus section/topic clustering
+# Frozen at Day 1 AM contract session; refinements welcome but
+# do NOT change the key names without pinging all 4 team members.
+
+facets:
+  venue_capacity:
+    display: "Venue Capacity"
+    description: "Room sizes, headcount limits, seating arrangements"
+    retrieval_bias: "dense"      # paraphrase-heavy
+
+  cancellation_terms:
+    display: "Cancellation & Refund Terms"
+    description: "Cancellation windows, refund tiers, penalties"
+    retrieval_bias: "sparse"     # exact policy language
+
+  pricing:
+    display: "Pricing & Costs"
+    description: "Per-head rates, package pricing, additional charges"
+    retrieval_bias: "sparse"     # numbers and currency matter
+
+  catering_options:
+    display: "Catering & Food"
+    description: "Menu types, dietary accommodations, external caterers"
+    retrieval_bias: "dense"
+
+  logistics:
+    display: "Logistics & Facilities"
+    description: "AV equipment, parking, accessibility, check-in/out"
+    retrieval_bias: "dense"
+
+  eligibility:
+    display: "Eligibility & Approval"
+    description: "Who can book, approval chains, role requirements"
+    retrieval_bias: "sparse"     # role names, org levels
+
+  procedure:
+    display: "Booking Procedure"
+    description: "Steps to book, required forms, timelines"
+    retrieval_bias: "sparse"
+
+  comparison:
+    display: "Venue Comparison"
+    description: "Side-by-side feature comparisons across venues"
+    retrieval_bias: "dense"
+
+# Default facet for intents that don't match any above
+default_facet: "general"
