@@ -31,6 +31,7 @@ generator:
     max_tokens: 700
     timeout_s: 30
     json_schema_mode: true            # S-6 layer 2: citations constrained to the allowlist enum
+    allow_remote: false               # HC-1: refuse non-local endpoints unless explicitly overridden
   extractive:                         # deterministic, offline backend (CI / golden replay)
     min_chunk_score: 0.5              # evidence below this rerank score is not used for claims
     max_claims_per_intent: 3
@@ -44,6 +45,7 @@ verifier:
   entailment_threshold: 0.6           # cited chunk |= sentence
   copy_check: true                    # numerals/dates/currency/entities must appear in a cited chunk
   reattribute_on_failure: true        # try other in-context chunks before retracting
+  demote_on_fabricated: true          # A §4.4: a fabricated ID demotes its sentence (no re-attribution rescue)
   regenerate_on_retract: false        # HC-5: regeneration would exceed the <=3 LLM calls/turn budget
   cross_encoder:
     model_path: models/nli-deberta-v3-small   # baked at build time; never lazily downloaded (G1)

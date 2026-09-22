@@ -1,0 +1,430 @@
+"""Claim verifier — S-6 constrained citation vocabulary + S-5 two-pass streaming.
+
+Roadmap 4.7 (S-6 layer 3, the unconditional backstop): every ``[... §...]``
+marker a draft carries is checked against the closed allowlist — the labels of
+exactly the chunks in this turn's context — and anything outside it is stripped
+and counted. Nothing the verifier emits can cite a fabricated label; CI asserts
+``fabricated_id_count == 0`` via ``ClaimVerifier.output_fabricated_count``.
+
+Roadmap 4.8 (S-5): each generated sentence is emitted PROVISIONAL at once and
+verified in a worker thread while the next one is generated — citation validity,
+entailment (cited chunk |= sentence) and a numeral/entity copy check. A sentence
+that cited a fabricated ID is RETRACTED (demoted to uncertainty, A §4.4); any other
+failing sentence is re-attributed to an in-context chunk that supports it, else
+RETRACTED. No regeneration on retract (HC-5), no LLM calls, no persistence
+(HC-4); thresholds come from ``config/synth.yaml`` ``verifier:`` (HC-2).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+import re
+import threading
+import time
+from collections import deque
+from typing import Any, AsyncIterable, AsyncIterator, Iterable, Protocol, Sequence
+
+from slrag.core.citations import find_markers, label_for_chunk, normalize_label
+from slrag.core.schemas import RetrievedChunk
+from slrag.synth.config import load_synth_config, resolve_path
+from slrag.synth.text import content_tokens, extract_numerals, extract_proper_nouns, overlap, stopwords_from
+from slrag.synth.types import DraftClaim, StreamEvent, VerificationResult
+
+_WS_RE = re.compile(r"\s+")
+_SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([.,;:!?)])")
+_END = object()          # immutable end-of-stream sentinel for the draft iterator
+
+
+def _config(config: dict[str, Any] | None) -> dict[str, Any]:
+    return config if config is not None else load_synth_config()
+
+
+def _tidy(text: str) -> str:
+    return _SPACE_BEFORE_PUNCT_RE.sub(r"\1", _WS_RE.sub(" ", text)).strip()
+
+
+# ---------------------------------------------------------------------------
+# S-6: closed citation allowlist + post-hoc stripper
+# ---------------------------------------------------------------------------
+class CitationAllowlist:
+    """The only labels a sentence may cite: those of the chunks actually in context (S-6 layer 1)."""
+
+    def __init__(self, chunks: Iterable[RetrievedChunk] = ()) -> None:
+        self._chunks: list[RetrievedChunk] = []
+        self._by_label: dict[str, list[RetrievedChunk]] = {}
+        seen: set[str] = set()
+        for chunk in chunks:
+            if chunk.chunk_id in seen:
+                continue
+            seen.add(chunk.chunk_id)
+            self._chunks.append(chunk)
+            self._by_label.setdefault(label_for_chunk(chunk), []).append(chunk)
+        self._labels = frozenset(self._by_label)
+
+    @classmethod
+    def from_chunks(cls, chunks: Iterable[RetrievedChunk]) -> CitationAllowlist:
+        return cls(chunks)
+
+    @property
+    def labels(self) -> frozenset[str]:
+        return self._labels
+
+    @property
+    def chunks(self) -> list[RetrievedChunk]:
+        return list(self._chunks)
+
+    def chunks_for(self, label: str) -> list[RetrievedChunk]:
+        canonical = normalize_label(label)
+        return list(self._by_label.get(canonical, ())) if canonical else []
+
+    def __contains__(self, label: object) -> bool:
+        return isinstance(label, str) and normalize_label(label) in self._labels
+
+    def enum(self) -> list[str]:
+        """Sorted labels for a JSON-schema ``enum`` on citation fields (S-6 layer 2)."""
+        return sorted(self._labels)
+
+    def filter(self, labels: Iterable[str]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        """(kept canonical labels in order, fabricated labels), both de-duplicated (S-6 layer 3)."""
+        kept: dict[str, None] = {}
+        fabricated: dict[str, None] = {}
+        for label in labels:
+            raw = str(label).strip()
+            if not raw:
+                continue
+            canonical = normalize_label(raw)
+            if canonical in self._labels:
+                kept[canonical] = None
+            else:
+                fabricated[canonical or raw] = None
+        return tuple(kept), tuple(fabricated)
+
+    def strip_markers(self, text: str) -> tuple[str, list[str], list[str]]:
+        """Remove every citation marker; returns (clean_text, allowed_found, fabricated_found)."""
+        markers = find_markers(text)
+        if not markers:
+            return text.strip(), [], []
+        found: list[str] = []
+        for raw, labels in markers:
+            text = text.replace(raw, " ")
+            found.extend(labels or [raw])
+        kept, fabricated = self.filter(found)
+        return _tidy(text), list(kept), list(fabricated)
+
+
+# ---------------------------------------------------------------------------
+# Entailment scorers
+# ---------------------------------------------------------------------------
+class EntailmentScorer(Protocol):
+    """``premise |= hypothesis`` in [0, 1]. Optionally also ``score_batch(pairs) -> list[float]``."""
+
+    def score(self, premise: str, hypothesis: str) -> float: ...
+
+
+class LexicalEntailmentScorer:
+    """Deterministic default: share of the hypothesis' content tokens present in the premise."""
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        self._stopwords = stopwords_from(_config(config))
+
+    def score(self, premise: str, hypothesis: str) -> float:
+        return overlap(content_tokens(hypothesis, self._stopwords), content_tokens(premise, self._stopwords))
+
+
+class CrossEncoderNLIScorer:
+    """NLI cross-encoder (``entailment_backend: cross_encoder``), local build-time-baked model only.
+
+    The model path is checked before ``sentence_transformers`` is imported; weights
+    are never downloaded at runtime (G1).
+    """
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        cfg = _config(config).get("verifier", {}).get("cross_encoder", {})
+        model_path = cfg.get("model_path")
+        path = resolve_path(model_path) if model_path else None
+        if path is None or not path.exists():
+            raise FileNotFoundError(
+                f"NLI cross-encoder model not found at {path or '<unset>'} (verifier.cross_encoder.model_path). "
+                "Bake it into the image at build time — it is never downloaded at runtime — "
+                "or set verifier.entailment_backend: lexical."
+            )
+        labels = [str(label).lower() for label in cfg.get("labels", ("contradiction", "entailment", "neutral"))]
+        missing = {"entailment", "contradiction"} - set(labels)
+        if missing:
+            raise ValueError(f"verifier.cross_encoder.labels is missing {sorted(missing)}")
+        self._entailment = labels.index("entailment")
+        self._contradiction = labels.index("contradiction")
+        from sentence_transformers import CrossEncoder  # lazy: optional heavy dependency
+
+        self._model = CrossEncoder(str(path), max_length=int(cfg.get("max_length", 256)))
+        self._lock = threading.Lock()   # fast tokenizers are not safe under concurrent threads
+
+    def probabilities(self, pairs: Sequence[tuple[str, str]]) -> list[list[float]]:
+        """Softmax over the label logits, one row per (premise, hypothesis) pair, config label order."""
+        if not pairs:
+            return []
+        with self._lock:
+            logits = self._model.predict([list(pair) for pair in pairs], show_progress_bar=False)
+        return [_softmax([float(x) for x in row]) for row in logits]
+
+    def score(self, premise: str, hypothesis: str) -> float:
+        return self.probabilities([(premise, hypothesis)])[0][self._entailment]
+
+    def score_batch(self, pairs: Sequence[tuple[str, str]]) -> list[float]:
+        return [row[self._entailment] for row in self.probabilities(pairs)]
+
+    def contradiction(self, premise: str, hypothesis: str) -> float:
+        """P(contradiction) — reusable by Component 3's contradiction gating."""
+        return self.probabilities([(premise, hypothesis)])[0][self._contradiction]
+
+
+def _softmax(logits: Sequence[float]) -> list[float]:
+    peak = max(logits)
+    exps = [math.exp(x - peak) for x in logits]
+    total = sum(exps)
+    return [e / total for e in exps]
+
+
+def make_scorer(config: dict[str, Any] | None = None) -> EntailmentScorer:
+    config = _config(config)
+    backend = config.get("verifier", {}).get("entailment_backend", "lexical")
+    if backend == "lexical":
+        return LexicalEntailmentScorer(config)
+    if backend == "cross_encoder":
+        return CrossEncoderNLIScorer(config)
+    raise ValueError(f"unknown verifier.entailment_backend {backend!r} (expected 'lexical' or 'cross_encoder')")
+
+
+# ---------------------------------------------------------------------------
+# Copy check + claim verification
+# ---------------------------------------------------------------------------
+def copy_check(sentence: str, premises: Sequence[str]) -> tuple[str, ...]:
+    """Hard values of ``sentence`` absent from ALL premises (numerals, proper nouns). Empty = pass."""
+    available = {numeral for premise in premises for numeral in extract_numerals(premise)}
+    lowered = [premise.lower() for premise in premises]
+    missing: dict[str, None] = {}
+    for numeral in extract_numerals(sentence):
+        if numeral not in available:
+            missing[numeral] = None
+    for noun in extract_proper_nouns(sentence):
+        pattern = re.compile(r"(?<!\w)" + r"\s+".join(map(re.escape, noun.lower().split())) + r"(?!\w)")
+        if not any(pattern.search(premise) for premise in lowered):
+            missing[noun] = None
+    return tuple(missing)
+
+
+class ClaimVerifier:
+    """Per-sentence grounding check (S-5) behind the closed allowlist (S-6). Thread-safe."""
+
+    def __init__(
+        self,
+        allowlist: CitationAllowlist,
+        *,
+        config: dict[str, Any] | None = None,
+        scorer: EntailmentScorer | None = None,
+    ) -> None:
+        self.allowlist = allowlist
+        self.config = _config(config)
+        cfg = self.config.get("verifier", {})
+        self.threshold = float(cfg.get("entailment_threshold", 0.6))
+        self.copy_check_enabled = bool(cfg.get("copy_check", True))
+        self.reattribute_on_failure = bool(cfg.get("reattribute_on_failure", True))
+        self.demote_on_fabricated = bool(cfg.get("demote_on_fabricated", True))
+        self.scorer = scorer if scorer is not None else make_scorer(self.config)
+        self._lock = threading.Lock()
+        self.fabricated_ids_stripped = 0
+        self.verified = 0
+        self.committed = 0
+        self.retracted = 0
+
+    def verify(self, draft: DraftClaim) -> VerificationResult:
+        started = time.perf_counter()
+        text, in_text, in_text_fabricated = self.allowlist.strip_markers(draft.text)
+        kept, fabricated = self.allowlist.filter((*draft.citations, *in_text, *in_text_fabricated))
+        cited = [chunk for label in kept for chunk in self.allowlist.chunks_for(label)]
+
+        reasons: list[str] = []
+        citations: tuple[str, ...] = kept
+        best: float | None = None
+        missing: tuple[str, ...] = ()
+        supporting: tuple[str, ...] = ()
+        if not cited:
+            reasons.append("no_valid_citation")
+        else:
+            scores = self._scores(cited, text)
+            best = max(scores)
+            supporting = tuple(c.chunk_id for c, s in zip(cited, scores) if s >= self.threshold)
+            if not supporting:
+                reasons.append("entailment_below_threshold")
+            if self.copy_check_enabled:
+                missing = copy_check(text, [c.text for c in cited])
+                if missing:
+                    reasons.append("copy_check_failed:" + ",".join(missing))
+
+        # A §4.4 / S-6 layer 3: a fabricated ID is stripped AND its sentence demoted to
+        # uncertainty — a model that invented a source is not trusted on that sentence.
+        demote = bool(fabricated) and self.demote_on_fabricated
+        if demote:
+            reasons.insert(0, "fabricated_citation")
+        ok, reattributed = not reasons, False
+        if not ok and self.reattribute_on_failure and not demote:
+            cited_ids = {c.chunk_id for c in cited}
+            candidates = [c for c in self.allowlist.chunks if c.chunk_id not in cited_ids]
+            passing, candidate_best = self._reattribute(text, candidates)
+            if passing:
+                ok = reattributed = True
+                citations = tuple(dict.fromkeys(label_for_chunk(c) for c, _ in passing))
+                best = max(s for _, s in passing)
+                missing = ()
+                supporting = tuple(c.chunk_id for c, _ in passing)
+                reasons.append("reattributed")
+            elif candidates:
+                best = candidate_best if best is None else max(best, candidate_best)
+                reasons.append("reattribution_failed")
+        if not ok:
+            supporting = ()
+
+        with self._lock:
+            self.verified += 1
+            self.fabricated_ids_stripped += len(fabricated)
+            if ok:
+                self.committed += 1
+            else:
+                self.retracted += 1
+        return VerificationResult(
+            draft=draft,
+            ok=ok,
+            text=text,
+            citations=citations,
+            fabricated=fabricated,
+            entailment=best,
+            missing_values=missing,
+            reattributed=reattributed,
+            supporting_chunk_ids=supporting,
+            reasons=tuple(reasons),
+            latency_ms=(time.perf_counter() - started) * 1000.0,
+        )
+
+    def output_fabricated_count(self, citations: Iterable[str]) -> int:
+        """Emitted labels outside the allowlist (exact canonical match) — the CI metric, must be 0."""
+        return sum(1 for label in citations if label not in self.allowlist.labels)
+
+    def _scores(self, chunks: Sequence[RetrievedChunk], sentence: str) -> list[float]:
+        pairs = [(chunk.text, sentence) for chunk in chunks]
+        batch = getattr(self.scorer, "score_batch", None)
+        if callable(batch):
+            return [float(s) for s in batch(pairs)]
+        return [float(self.scorer.score(premise, hypothesis)) for premise, hypothesis in pairs]
+
+    def _reattribute(
+        self, sentence: str, candidates: Sequence[RetrievedChunk]
+    ) -> tuple[list[tuple[RetrievedChunk, float]], float]:
+        """Candidates (allowlist order) passing entailment AND copy check, plus the best score seen."""
+        if not candidates:
+            return [], 0.0
+        scores = self._scores(candidates, sentence)
+        passing = [
+            (chunk, score)
+            for chunk, score in zip(candidates, scores)
+            if score >= self.threshold and not (self.copy_check_enabled and copy_check(sentence, [chunk.text]))
+        ]
+        return passing, max(scores)
+
+
+# ---------------------------------------------------------------------------
+# S-5: two-pass provisional/committed streaming
+# ---------------------------------------------------------------------------
+class TwoPassStreamer:
+    """PROVISIONAL on arrival; COMMITTED/RETRACTED in arrival order as verification lands."""
+
+    def __init__(self, verifier: ClaimVerifier) -> None:
+        self.verifier = verifier
+        self._results: list[VerificationResult] = []
+
+    @property
+    def results(self) -> list[VerificationResult]:
+        return list(self._results)
+
+    def committed_results(self) -> list[VerificationResult]:
+        return [result for result in self._results if result.ok]
+
+    async def run(self, drafts: AsyncIterable[DraftClaim] | Iterable[DraftClaim]) -> AsyncIterator[StreamEvent]:
+        self._results = []
+        iterator = _aiter(drafts)
+        pending: deque[tuple[DraftClaim, asyncio.Task[VerificationResult]]] = deque()
+        next_draft: asyncio.Task[Any] | None = asyncio.create_task(_next(iterator))
+        try:
+            while next_draft is not None or pending:
+                waiting = {next_draft} if next_draft is not None else set()
+                if pending:
+                    waiting.add(pending[0][1])
+                await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+                while pending and pending[0][1].done():
+                    draft, task = pending.popleft()
+                    yield self._final(draft, task.result())
+                if next_draft is not None and next_draft.done():
+                    draft = next_draft.result()
+                    if draft is _END:
+                        next_draft = None
+                        continue
+                    # Verify sentence N and generate N+1 concurrently, then show N dimmed.
+                    pending.append((draft, asyncio.create_task(asyncio.to_thread(self.verifier.verify, draft))))
+                    next_draft = asyncio.create_task(_next(iterator))
+                    yield self._provisional(draft)
+        finally:
+            if next_draft is not None:
+                next_draft.cancel()
+            for _, task in pending:
+                task.cancel()
+
+    def _provisional(self, draft: DraftClaim) -> StreamEvent:
+        allowlist = self.verifier.allowlist
+        text, in_text, _ = allowlist.strip_markers(draft.text)
+        citations, _ = allowlist.filter((*draft.citations, *in_text))
+        return StreamEvent(
+            kind="provisional",
+            seq=draft.seq,
+            text=text,
+            citations=citations,
+            facet=draft.facet,
+            intent_id=draft.intent_id,
+        )
+
+    def _final(self, draft: DraftClaim, result: VerificationResult) -> StreamEvent:
+        self._results.append(result)
+        return StreamEvent(
+            kind="committed" if result.ok else "retracted",
+            seq=draft.seq,
+            text=result.text,
+            citations=result.citations,
+            facet=draft.facet,
+            intent_id=draft.intent_id,
+            verification=result,
+        )
+
+
+async def verify_all(
+    verifier: ClaimVerifier, drafts: AsyncIterable[DraftClaim] | Iterable[DraftClaim]
+) -> tuple[list[StreamEvent], list[VerificationResult]]:
+    streamer = TwoPassStreamer(verifier)
+    events = [event async for event in streamer.run(drafts)]
+    return events, streamer.results
+
+
+def _aiter(drafts: AsyncIterable[DraftClaim] | Iterable[DraftClaim]) -> AsyncIterator[DraftClaim]:
+    if hasattr(drafts, "__aiter__"):
+        return drafts.__aiter__()
+    return _from_iterable(drafts)
+
+
+async def _from_iterable(items: Iterable[DraftClaim]) -> AsyncIterator[DraftClaim]:
+    for item in items:
+        yield item
+
+
+async def _next(iterator: AsyncIterator[DraftClaim]) -> Any:
+    try:
+        return await iterator.__anext__()
+    except StopAsyncIteration:
+        return _END
