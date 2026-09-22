@@ -38,23 +38,50 @@ def cmd_index(args: argparse.Namespace) -> None:
 
 def cmd_replay(args: argparse.Namespace) -> None:
     """Replay a JSONL stream against the engine and produce events.jsonl."""
-    # TODO: Wire up full pipeline replay (Day 2)
+    import asyncio
+    import json
+    from slrag.core.schemas import TranscriptChunk
+    from slrag.core.session import SessionState
+    from slrag.core.orchestrator import Orchestrator
+    from slrag.stubs.fake_synthesis import fake_synthesize
+
     logger.info(
         f"Replay mode: stream={args.stream}, corpus={args.corpus}, out={args.out}"
     )
-    logger.warning("Full replay not yet implemented — run golden stub replay instead")
 
-    # For now, run the stub pipeline to produce schema-valid output
-    from slrag.stubs.fake_synthesis import fake_synthesize
+    async def run_replay():
+        session = SessionState(session_id="sess_replay")
+        orchestrator = Orchestrator(session)
+        events = []
+        
+        stream_path = Path(args.stream)
+        if not stream_path.exists():
+            logger.error(f"Stream file not found: {stream_path}")
+            return
+            
+        with open(stream_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                data = json.loads(line)
+                chunk = TranscriptChunk(**data)
+                
+                decision = await orchestrator.process_chunk(chunk)
+                events.append(decision.model_dump())
+        
+        # Call synthesis at the end
+        output = fake_synthesize(session_id=session.session_id, turn_id=session.turn_id)
+        events.append(output.model_dump())
+        
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            for ev in events:
+                f.write(json.dumps(ev) + "\n")
+                
+        logger.info(f"Replay output written to {out_path}")
 
-    output = fake_synthesize(session_id="sess_replay", turn_id=1)
-
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(output.model_dump_json(indent=2))
-
-    logger.info(f"Stub replay output written to {out_path}")
+    asyncio.run(run_replay())
 
 
 def cmd_chat(args: argparse.Namespace) -> None:
