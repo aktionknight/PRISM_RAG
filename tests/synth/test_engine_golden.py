@@ -1,0 +1,204 @@
+"""Golden replay for Component 4: brief Examples 1–3 reproduced end-to-end.
+
+Upstream components are replaced by fixture data (what the stubs/real Component
+1–3 would hand over), so this is the contract test the walking skeleton's CI
+runs against ``SynthesisEngine`` before Matangi's harness wires it in.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from slrag.core.citations import find_markers
+from slrag.core.schemas import AnswerOutput, TelemetryEvent
+from slrag.synth.engine import SynthesisEngine, TurnInput
+from slrag.synth.generator import LLMGenerator, LLMResponse
+from tests.helpers import (
+    FixtureRetriever,
+    load_scenarios,
+    scenario_turns,
+    turn_decisions,
+    turn_evidence,
+    turn_sub_intents,
+)
+
+
+def _turn_input(turn: dict) -> TurnInput:
+    return TurnInput(
+        turn_id=turn["turn_id"],
+        utterance=turn["utterance"],
+        t_s_end=turn["t_s_end"],
+        sub_intents=turn_sub_intents(turn),
+        evidence=turn_evidence(turn),
+        retrieval_events=turn["retrieval_events"],
+        controller_decisions=turn_decisions(turn),
+    )
+
+
+async def _run(name: str, *, retriever=None, **engine_kwargs):
+    turns = scenario_turns(name)
+    if retriever is None:
+        delta_evidence = {}
+        for turn in turns:
+            delta_evidence.update(turn.get("delta_evidence", {}))
+        retriever = FixtureRetriever(delta_evidence)
+    engine = SynthesisEngine(f"sess_{name}", retrieve_fn=retriever, **engine_kwargs)
+    results = [await engine.handle_turn(_turn_input(turn)) for turn in turns]
+    return engine, retriever, turns, results
+
+
+def _assert_contract(result) -> None:
+    """Schema-valid output, closed allowlist, every marker in the answer is a listed citation."""
+    AnswerOutput.model_validate(json.loads(result.output.model_dump_json()))
+    assert result.fabricated_id_count == 0
+    marked = {label for _, labels in find_markers(result.output.answer) for label in labels}
+    assert marked <= set(result.output.citations)
+    assert all(isinstance(event, TelemetryEvent) for event in result.telemetry)
+    rendered = result.to_json()
+    assert list(rendered)[:5] == ["retrieval_events", "sub_queries", "answer", "citations", "uncertainty"]
+
+
+def _assert_two_pass_order(events) -> None:
+    seen_provisional, resolved = set(), []
+    for event in events:
+        if event.kind == "provisional":
+            seen_provisional.add(event.seq)
+        else:
+            assert event.seq in seen_provisional, "committed/retracted before provisional"
+            resolved.append(event.seq)
+    assert resolved == sorted(resolved) and set(resolved) == seen_provisional
+
+
+async def test_example1_multi_intent_reproduces_brief_output():
+    _, _, turns, (result,) = await _run("example1_multi_intent")
+    turn, expected = turns[0], turns[0]["expected"]
+
+    assert result.turn_type == expected["turn_type"]
+    out = result.output
+    assert out.answer_version == expected["answer_version"]
+    assert out.sub_queries == expected["sub_queries"]
+    assert out.retrieval_events == turn["retrieval_events"]
+    assert out.citations == expected["citations"]
+    assert out.uncertainty == expected["uncertainty"]
+    assert [c["facet"] for c in result.extensions["claims"]][:1] == ["venue_capacity"]
+    assert {c["facet"] for c in result.extensions["claims"]} == set(expected["facets_covered"])
+    assert result.extensions["version_lineage"]["to"] == 1
+    assert result.extensions["retrieval_required"] is True
+    _assert_contract(result)
+    _assert_two_pass_order(result.stream_events)
+
+
+async def test_example2_refinement_is_a_delta_not_a_restart():
+    engine, retriever, turns, (v1, v2) = await _run("example2_refinement")
+    exp1, exp2 = turns[0]["expected"], turns[1]["expected"]
+
+    assert v1.turn_type == "NEW_INTENT" and v1.output.answer_version == 1
+    assert v1.output.citations == exp1["citations"]
+    assert len(v1.extensions["claims"]) == exp1["claims_active"]
+
+    assert v2.turn_type == exp2["turn_type"]
+    assert dict(v2.classification.delta.slots) == exp2["constraint_delta"]
+    event = v2.refinement.to_event()
+    assert {k: event[k] for k in exp2["refinement"]} == exp2["refinement"]
+    assert v2.refinement.citations_preserved == exp2["citations_preserved"]
+    assert v2.refinement.citations_added == exp2["citations_added"]
+    assert v2.output.answer_version == 2
+    assert v2.output.citations == exp2["citations_preserved"] + exp2["citations_added"]
+    assert v2.output.sub_queries == exp2["sub_queries"]
+    assert [e["trigger"] for e in v2.output.retrieval_events] == exp2["retrieval_triggers"]
+    assert [q.search_string for q in retriever.calls] == exp2["sub_queries"]
+
+    lineage = v2.extensions["version_lineage"]
+    assert (lineage["from"], lineage["to"]) == (1, 2)
+    v1_claims = {c["claim_id"]: c for c in v1.extensions["claims"]}
+    v2_claims = {c["claim_id"]: c for c in v2.extensions["claims"]}
+    for claim_id in lineage["retained"]:                      # retained byte-for-byte
+        assert v2_claims[claim_id] == v1_claims[claim_id]
+    assert set(lineage["superseded"]).isdisjoint(v2_claims)   # superseded no longer active
+    assert any("reimbursed for economy airfare" in c["text"] for c in v2_claims.values())
+    _assert_contract(v1)
+    _assert_contract(v2)
+
+
+class ExplodingRetriever:
+    def __call__(self, sub_intent):
+        raise AssertionError("presentation-only turns must never reach retrieval")
+
+
+async def test_example3_presentation_only_never_retrieves():
+    engine, _, turns, (v1, v2) = await _run("example3_presentation", retriever=ExplodingRetriever())
+    expected = turns[-1]["expected"]
+
+    assert v2.turn_type == expected["turn_type"]
+    assert v2.output.retrieval_events == []
+    assert v2.output.answer_version == expected["answer_version"] == v1.output.answer_version
+    assert set(v2.output.citations) <= set(v1.output.citations)
+    assert v2.extensions["retrieval_required"] is expected["retrieval_required"]
+    assert v2.extensions["suppression_reason"] == expected["suppression_reason"]
+    bullets = [line for line in v2.output.answer.splitlines() if line.strip()]
+    assert len(bullets) == expected["bullet_count"]
+    assert all(line.startswith("- ") for line in bullets)
+    assert v2.usage.llm_calls == 0
+    _assert_contract(v2)
+
+
+class FakeLLM:
+    """Local-LLM stand-in: cites one real label and one fabricated label per call."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def complete(self, prompt: str, *, json_schema=None) -> LLMResponse:
+        self.calls += 1
+        claims = [
+            {"intent_id": "i1", "facet": "venue_capacity",
+             "text": "Venue A holds up to 40 people.", "citations": ["Doc_12 §2"]},
+            {"intent_id": "i1", "facet": "venue_capacity",
+             "text": "Venue B seats up to 60 people and includes a breakout room.",
+             "citations": ["Doc_77 §9"]},
+            {"intent_id": "i2", "facet": "cancellation_terms",
+             "text": "Cancellations are free up to 90 days before the event.", "citations": ["Doc_31 §4"]},
+        ]
+        return LLMResponse(text=json.dumps({"claims": claims}), prompt_tokens=900, completion_tokens=120)
+
+
+async def test_llm_backend_respects_budget_and_allowlist():
+    client = FakeLLM()
+    generator = LLMGenerator(client)
+    _, _, _, (result,) = await _run("example1_multi_intent", generator=generator)
+
+    assert client.calls == 1 and result.usage.llm_calls == 1            # HC-5: one synthesis call/turn
+    assert result.fabricated_id_count == 0                                # Doc_77 never reaches output
+    assert "Doc_77 §9" not in result.output.answer
+    texts = [c["text"] for c in result.extensions["claims"]]
+    assert texts == ["Venue A holds up to 40 people."]
+    assert "Cancellations are free up to 90 days before the event." not in texts   # copy check retracts
+    demoted = [r for r in result.verification if "fabricated_citation" in r.reasons]
+    assert [r.fabricated for r in demoted] == [("Doc_77 §9",)]               # A §4.4: demoted, not rescued
+    assert "Cancellation and refund terms could not be verified" in result.output.uncertainty
+    _assert_contract(result)
+
+
+async def test_sessions_are_isolated_and_destroyable():
+    engine_a, _, _, _ = await _run("example1_multi_intent")
+    engine_b = SynthesisEngine("sess_other")
+    assert len(engine_b.graph) == 0 and not engine_b.graph.known_labels()
+    engine_a.destroy()
+    assert len(engine_a.graph) == 0 and engine_a.session_constraints == {}
+
+
+async def test_stream_turn_emits_provisional_events_before_the_result():
+    turn = scenario_turns("example1_multi_intent")[0]
+    engine = SynthesisEngine("sess_stream")
+    items = [item async for item in engine.stream_turn(_turn_input(turn))]
+    assert items[0].kind == "provisional"
+    assert items[-1].output.answer_version == 1
+    _assert_two_pass_order(items[:-1])
+
+
+@pytest.mark.parametrize("name", sorted(load_scenarios()))
+async def test_every_golden_scenario_has_zero_fabricated_ids(name):
+    _, _, _, results = await _run(name, retriever=None if name != "example3_presentation" else ExplodingRetriever())
+    assert all(r.fabricated_id_count == 0 for r in results)
