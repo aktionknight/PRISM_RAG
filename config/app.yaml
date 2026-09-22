@@ -5,3 +5,9 @@ use_stub_controller: true     # Diya    — Component 1
 use_stub_decomposer: true     # Aakrit  — Component 2
 use_stub_retriever: true      # Aakrit  — Component 3
 use_stub_synthesis: false     # Sivansh — Component 4 (real SynthesisEngine landed D2)
+
+# Session store (core/session.py, HC-4): in-process memory only; a session is
+# destroyed when ended, when idle past ttl_s, or at shutdown.
+session:
+  ttl_s: 1800          # idle seconds before a session is destroyed
+  max_sessions: 256    # beyond this, the least-recently-used idle session is ended
