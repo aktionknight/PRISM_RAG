@@ -7,12 +7,14 @@ runs against ``SynthesisEngine`` before Matangi's harness wires it in.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import pytest
 
 from slrag.core.citations import find_markers
 from slrag.core.schemas import AnswerOutput, TelemetryEvent
+from slrag.core.session import SessionStore
 from slrag.synth.engine import SynthesisEngine, TurnInput
 from slrag.synth.generator import LLMGenerator, LLMResponse
 from tests.helpers import (
@@ -202,3 +204,36 @@ async def test_stream_turn_emits_provisional_events_before_the_result():
 async def test_every_golden_scenario_has_zero_fabricated_ids(name):
     _, _, _, results = await _run(name, retriever=None if name != "example3_presentation" else ExplodingRetriever())
     assert all(r.fabricated_id_count == 0 for r in results)
+
+
+async def _run_routed(name: str):
+    """Harness order (audit C-3): classify at utterance end; run Components 2-3 only when told to."""
+    turns = scenario_turns(name)
+    delta_evidence = {k: v for turn in turns for k, v in turn.get("delta_evidence", {}).items()}
+    retriever = FixtureRetriever(delta_evidence)
+    store = SessionStore(lambda sid: SynthesisEngine(sid, retrieve_fn=retriever), ttl_s=60)
+    results, upstream_passes = [], 0
+    for turn in turns:
+        async with store.turn(f"sess_{name}") as engine:
+            classification = engine.classify(turn["utterance"], turn_decisions(turn))
+            routed = TurnInput(turn_id=turn["turn_id"], utterance=turn["utterance"], t_s_end=turn["t_s_end"],
+                               controller_decisions=turn_decisions(turn), classification=classification)
+            if classification.needs_upstream_retrieval:
+                upstream_passes += 1
+                routed = dataclasses.replace(routed, sub_intents=turn_sub_intents(turn),
+                                             evidence=turn_evidence(turn), retrieval_events=turn["retrieval_events"])
+            results.append(await engine.handle_turn(routed))
+    return turns, results, retriever, upstream_passes
+
+
+@pytest.mark.parametrize("name", sorted(load_scenarios()))
+async def test_pre_decomposition_routing_reproduces_every_golden_scenario(name):
+    _, _, turns, golden = await _run(name)
+    _, routed, retriever, upstream_passes = await _run_routed(name)
+
+    assert [r.output.model_dump() for r in routed] == [r.output.model_dump() for r in golden]
+    assert upstream_passes == sum(t["expected"]["turn_type"] == "NEW_INTENT" for t in turns if "expected" in t)
+    assert all(r.telemetry[0].payload["precomputed"] for r in routed)
+    if name == "example2_refinement":
+        # The refinement turn skipped upstream entirely: its only searches are the 2 targeted ones.
+        assert [q.search_string for q in retriever.calls] == turns[1]["expected"]["sub_queries"]

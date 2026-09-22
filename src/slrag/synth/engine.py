@@ -1,8 +1,9 @@
 """SynthesisEngine — Component 4 entry point (roadmap §1 topology stage [4]).
 
 Replaces ``stubs.fake_synthesize`` behind ``config/app.yaml: use_stub_synthesis``.
-One engine per session; all state (ClaimGraph, constraints, intents) lives on the
-instance and dies with it (HC-4). Per turn:
+One engine per session, held in ``core.session.SessionStore``; all state (ClaimGraph,
+constraints, intents) lives on the instance and dies with it (HC-4). The harness
+routes each turn with ``classify()`` before decomposition. Per turn:
 
     classify ─┬─ NEW_INTENT            → generate → two-pass verify → graph revision
               ├─ CONSTRAINT_REFINEMENT → delta plan → pool-first / targeted queries
@@ -71,6 +72,8 @@ class TurnInput:
     evidence: Mapping[str, Sequence[RetrievedChunk]] = field(default_factory=dict)   # intent_id -> chunks
     retrieval_events: Sequence[dict] = ()
     controller_decisions: Sequence[ControllerDecision] = ()
+    # From SynthesisEngine.classify() at utterance end; None -> classified here.
+    classification: TurnClassification | None = None
 
 
 @dataclass
@@ -120,6 +123,28 @@ class SynthesisEngine:
         self._uncertainty = ""
 
     # -- public API ------------------------------------------------------------
+    def classify(
+        self,
+        utterance: str,
+        controller_decisions: Sequence[ControllerDecision] = (),
+        sub_intents: Sequence[SubIntent] = (),
+    ) -> TurnClassification:
+        """Route a turn before decomposition runs (audit C-3).
+
+        Call at ``utterance_end``. When ``needs_upstream_retrieval`` is False the
+        harness skips Components 2-3 and hands the classification back in
+        ``TurnInput.classification``, so a refinement turn never triggers a full
+        corpus search upstream. Run classify and ``handle_turn`` inside the same
+        ``SessionStore.turn()`` so no other turn changes the session in between.
+        """
+        return self.delta.classifier.classify(
+            utterance,
+            self.graph,
+            session_constraints=self.session_constraints,
+            controller_decisions=controller_decisions,
+            sub_intents=sub_intents,
+        )
+
     async def handle_turn(self, turn: TurnInput) -> SynthesisResult:
         result = None
         async for item in self.stream_turn(turn):
@@ -131,19 +156,16 @@ class SynthesisEngine:
     async def stream_turn(self, turn: TurnInput) -> AsyncIterator[StreamEvent | SynthesisResult]:
         """Yields two-pass StreamEvents as sentences are generated/verified, then the result."""
         started = time.perf_counter()
-        classification = self.delta.classifier.classify(
-            turn.utterance,
-            self.graph,
-            session_constraints=self.session_constraints,
-            controller_decisions=turn.controller_decisions,
-            sub_intents=turn.sub_intents,
+        precomputed = turn.classification is not None
+        classification = turn.classification or self.classify(
+            turn.utterance, turn.controller_decisions, turn.sub_intents
         )
         telemetry = _Telemetry(self.session_id, turn)
         telemetry.add(
             "classify",
             _ms(started),
             {"turn_type": classification.turn_type, "reason": classification.reason,
-             "delta": dict(classification.delta.slots)},
+             "delta": dict(classification.delta.slots), "precomputed": precomputed},
         )
 
         if classification.turn_type == "PRESENTATION_ONLY":

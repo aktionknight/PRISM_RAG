@@ -126,6 +126,15 @@ class TurnClassification:
     reason: str
     delta: ConstraintDelta = field(default_factory=ConstraintDelta)
 
+    @property
+    def needs_upstream_retrieval(self) -> bool:
+        """Whether Components 2-3 should decompose and retrieve for this turn (audit C-3).
+
+        Refinement turns issue only Component 4's targeted delta queries, and
+        presentation turns retrieve nothing, so both skip the full upstream pass.
+        """
+        return self.turn_type == "NEW_INTENT"
+
 
 @dataclass(frozen=True)
 class DeltaTarget:
