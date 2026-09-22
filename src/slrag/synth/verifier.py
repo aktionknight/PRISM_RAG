@@ -8,7 +8,8 @@ and counted. Nothing the verifier emits can cite a fabricated label; CI asserts
 
 Roadmap 4.8 (S-5): each generated sentence is emitted PROVISIONAL at once and
 verified in a worker thread while the next one is generated — citation validity,
-entailment (cited chunk |= sentence) and a numeral/entity copy check. A sentence
+entailment (cited chunk |= sentence), negation polarity against the entailing
+clause, and a numeral/entity copy check. A sentence
 that cited a fabricated ID is RETRACTED (demoted to uncertainty, A §4.4); any other
 failing sentence is re-attributed to an in-context chunk that supports it, else
 RETRACTED. No regeneration on retract (HC-5), no LLM calls, no persistence
@@ -28,7 +29,14 @@ from typing import Any, AsyncIterable, AsyncIterator, Iterable, Protocol, Sequen
 from slrag.core.citations import find_markers, label_for_chunk, normalize_label
 from slrag.core.schemas import RetrievedChunk
 from slrag.synth.config import load_synth_config, resolve_path
-from slrag.synth.text import content_tokens, extract_numerals, extract_proper_nouns, overlap, stopwords_from
+from slrag.synth.text import (
+    content_tokens,
+    extract_numerals,
+    extract_proper_nouns,
+    overlap,
+    split_clauses,
+    stopwords_from,
+)
 from slrag.synth.types import DraftClaim, StreamEvent, VerificationResult
 
 _WS_RE = re.compile(r"\s+")
@@ -214,6 +222,43 @@ def copy_check(sentence: str, premises: Sequence[str]) -> tuple[str, ...]:
     return tuple(missing)
 
 
+class PolarityCheck:
+    """Catches a sentence that reuses a chunk's words with the opposite polarity (audit W-4).
+
+    Lexical entailment drops "not"/"no" as stopwords, so "card statements are
+    accepted" scores 1.0 against "card statements alone are not accepted". Each
+    clause of the sentence is aligned to the premise clause covering most of its
+    content tokens, and the two must agree on the parity of negation cues
+    (``verifier.negation_cues`` plus "n't"). When several premise clauses tie as
+    best match, the sentence passes if any of them agrees.
+    """
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        config = _config(config)
+        cues = [str(cue) for cue in config.get("verifier", {}).get("negation_cues", ())]
+        alternatives = [r"\b(?:" + "|".join(map(re.escape, cues)) + r")\b"] if cues else []
+        self._negation_re = re.compile("|".join([*alternatives, r"n['’]t\b"]), re.IGNORECASE)
+        self._stopwords = stopwords_from(config)
+
+    def negated(self, text: str) -> bool:
+        return len(self._negation_re.findall(text)) % 2 == 1
+
+    def flipped(self, premise: str, sentence: str) -> bool:
+        premise_clauses = [(set(content_tokens(c, self._stopwords)), self.negated(c)) for c in split_clauses(premise)]
+        if not premise_clauses:
+            return False
+        for clause in split_clauses(sentence):
+            tokens = set(content_tokens(clause, self._stopwords))
+            if not tokens:
+                continue
+            coverage = [overlap(tokens, premise_tokens) for premise_tokens, _ in premise_clauses]
+            best = max(coverage)
+            polarity = self.negated(clause)
+            if all(neg != polarity for (_, neg), cov in zip(premise_clauses, coverage) if cov == best):
+                return True
+        return False
+
+
 class ClaimVerifier:
     """Per-sentence grounding check (S-5) behind the closed allowlist (S-6). Thread-safe."""
 
@@ -231,6 +276,7 @@ class ClaimVerifier:
         self.copy_check_enabled = bool(cfg.get("copy_check", True))
         self.reattribute_on_failure = bool(cfg.get("reattribute_on_failure", True))
         self.demote_on_fabricated = bool(cfg.get("demote_on_fabricated", True))
+        self.polarity = PolarityCheck(self.config) if cfg.get("polarity_check", True) else None
         self.scorer = scorer if scorer is not None else make_scorer(self.config)
         self._lock = threading.Lock()
         self.fabricated_ids_stripped = 0
@@ -254,9 +300,12 @@ class ClaimVerifier:
         else:
             scores = self._scores(cited, text)
             best = max(scores)
-            supporting = tuple(c.chunk_id for c, s in zip(cited, scores) if s >= self.threshold)
-            if not supporting:
+            entailing = [c for c, s in zip(cited, scores) if s >= self.threshold]
+            supporting = tuple(c.chunk_id for c in entailing if not self._flipped(c.text, text))
+            if not entailing:
                 reasons.append("entailment_below_threshold")
+            elif not supporting:
+                reasons.append("negation_mismatch")
             if self.copy_check_enabled:
                 missing = copy_check(text, [c.text for c in cited])
                 if missing:
@@ -320,16 +369,21 @@ class ClaimVerifier:
     def _reattribute(
         self, sentence: str, candidates: Sequence[RetrievedChunk]
     ) -> tuple[list[tuple[RetrievedChunk, float]], float]:
-        """Candidates (allowlist order) passing entailment AND copy check, plus the best score seen."""
+        """Candidates (allowlist order) passing entailment, polarity AND copy check, plus the best score seen."""
         if not candidates:
             return [], 0.0
         scores = self._scores(candidates, sentence)
         passing = [
             (chunk, score)
             for chunk, score in zip(candidates, scores)
-            if score >= self.threshold and not (self.copy_check_enabled and copy_check(sentence, [chunk.text]))
+            if score >= self.threshold
+            and not self._flipped(chunk.text, sentence)
+            and not (self.copy_check_enabled and copy_check(sentence, [chunk.text]))
         ]
         return passing, max(scores)
+
+    def _flipped(self, premise: str, sentence: str) -> bool:
+        return self.polarity is not None and self.polarity.flipped(premise, sentence)
 
 
 # ---------------------------------------------------------------------------

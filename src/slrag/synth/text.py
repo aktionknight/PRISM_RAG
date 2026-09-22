@@ -14,6 +14,7 @@ from typing import Any, Iterable
 _TOKEN_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?|[a-z]+(?:-[a-z]+)*")
 _NUMERAL_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(])")
+_CLAUSE_RE = re.compile(r"\s*[;:]\s*")
 # Capitalised word, optionally followed by capitalised words or a single
 # capital/digit designator ("Venue A", "Doc 12", "New Delhi").
 _PROPER_RE = re.compile(r"\b[A-Z][a-zA-Z]+(?:\s+(?:[A-Z][a-zA-Z]+|[A-Z0-9]\b))*")
@@ -54,6 +55,11 @@ def overlap(a: Iterable[str], b: Iterable[str]) -> float:
 
 def split_sentences(text: str) -> list[str]:
     return [s.strip() for s in _SENTENCE_RE.split(text.strip()) if s.strip()]
+
+
+def split_clauses(text: str) -> list[str]:
+    """Sentences, further split at ';' and ':' (each side can carry its own polarity)."""
+    return [c for s in split_sentences(text) for c in _CLAUSE_RE.split(s) if c.strip()]
 
 
 def extract_numerals(text: str) -> list[str]:

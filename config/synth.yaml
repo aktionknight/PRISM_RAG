@@ -46,6 +46,8 @@ verifier:
   copy_check: true                    # numerals/dates/currency/entities must appear in a cited chunk
   reattribute_on_failure: true        # try other in-context chunks before retracting
   demote_on_fabricated: true          # A §4.4: a fabricated ID demotes its sentence (no re-attribution rescue)
+  polarity_check: true                # entailing clause and sentence must agree on negation (lexical scorer is blind to it)
+  negation_cues: [not, "no", never, none, nor, neither, cannot, without, nothing, nobody, nowhere]   # plus "n't"
   regenerate_on_retract: false        # HC-5: regeneration would exceed the <=3 LLM calls/turn budget
   cross_encoder:
     model_path: models/nli-deberta-v3-small   # baked at build time; never lazily downloaded (G1)

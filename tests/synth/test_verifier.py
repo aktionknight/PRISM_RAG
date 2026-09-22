@@ -9,6 +9,7 @@ import types
 
 import pytest
 
+from slrag.core.schemas import RetrievedChunk
 from slrag.synth.config import load_synth_config
 from slrag.synth.types import DraftClaim
 from slrag.synth.verifier import (
@@ -37,6 +38,11 @@ def _config(**verifier):
 
 def _draft(text, *citations, seq=0, facet="venue_capacity"):
     return DraftClaim(seq=seq, facet=facet, text=text, citations=tuple(citations), intent_id=f"i{seq}")
+
+
+def scored_chunk(chunk_id, text, score=0.9):
+    doc_id, section_id, _ = chunk_id.split("#")
+    return RetrievedChunk(chunk_id=chunk_id, doc_id=doc_id, section_id=section_id, text=text, score=score)
 
 
 @pytest.fixture
@@ -165,6 +171,47 @@ def test_wrong_entity_fails_copy_check(verifier):
     assert not result.ok
     assert "Venue C" in result.missing_values
     assert any(reason.startswith("copy_check_failed") for reason in result.reasons)
+
+
+RECEIPTS = "All reimbursement claims must include itemised receipts; card statements alone are not accepted."
+
+
+@pytest.mark.parametrize("text, citation", [
+    ("Card statements alone are accepted.", "Doc_44 §5"),          # drops the chunk's "not"
+    ("Venue A does not hold up to 40 people.", "Doc_12 §2"),         # adds a "not" the chunk lacks
+    ("Venue A never holds up to 40 people.", "Doc_12 §2"),
+])
+def test_polarity_flip_is_retracted_despite_full_lexical_overlap(verifier, text, citation):
+    """Audit W-4: the lexical scorer drops negations as stopwords, so these score ~1.0."""
+    result = verifier.verify(_draft(text, citation))
+    assert result.entailment is not None and result.entailment >= verifier.threshold
+    assert not result.ok and not result.reattributed
+    assert "negation_mismatch" in result.reasons
+    assert result.supporting_chunk_ids == ()
+
+
+@pytest.mark.parametrize("text", [
+    RECEIPTS,                                                   # verbatim, negation included
+    "All reimbursement claims must include itemised receipts.",  # the positive clause alone
+    "Card statements alone aren't accepted.",                   # contraction keeps the polarity
+])
+def test_matching_polarity_commits(verifier, text):
+    result = verifier.verify(_draft(text, "Doc_44 §5"))
+    assert result.ok, result.reasons
+
+
+def test_polarity_check_can_be_disabled(allowlist):
+    lenient = ClaimVerifier(allowlist, config=_config(polarity_check=False))
+    assert lenient.verify(_draft("Card statements alone are accepted.", "Doc_44 §5")).ok
+
+
+def test_polarity_flip_is_not_rescued_by_reattribution():
+    # Same claim text in two chunks: re-attribution must apply the polarity check too.
+    chunks = [scored_chunk("Doc_1#1#0", "Deposits are not refundable."),
+              scored_chunk("Doc_2#1#0", "Deposits are not refundable after booking.")]
+    verifier = ClaimVerifier(CitationAllowlist.from_chunks(chunks), config=load_synth_config())
+    result = verifier.verify(_draft("Deposits are refundable.", "Doc_1 §1"))
+    assert not result.ok and "reattribution_failed" in result.reasons
 
 
 def test_unsupported_sentence_is_retracted(verifier):
