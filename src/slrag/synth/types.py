@@ -106,6 +106,7 @@ class GenerationUsage:
     completion_tokens: int = 0
     backend: str = "extractive"
     latency_ms: float = 0.0
+    first_draft_ms: float | None = None   # LLM call start -> first complete claim (TTFT evidence, audit W-1)
 
 
 # ---------------------------------------------------------------------------

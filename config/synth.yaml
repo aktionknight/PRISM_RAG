@@ -32,6 +32,8 @@ generator:
     timeout_s: 30
     json_schema_mode: true            # S-6 layer 2: citations constrained to the allowlist enum
     allow_remote: false               # HC-1: refuse non-local endpoints unless explicitly overridden
+    stream: true                      # SSE: each claim reaches the verifier as its JSON object closes (W-1)
+    stream_usage: true                # ask for token usage in the final stream chunk (stream_options)
   extractive:                         # deterministic, offline backend (CI / golden replay)
     min_chunk_score: 0.5              # evidence below this rerank score is not used for claims
     max_claims_per_intent: 3

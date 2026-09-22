@@ -84,3 +84,36 @@ class FixtureRetriever:
         self.calls.append(sub_intent)
         rows = self.delta_evidence.get(sub_intent.search_string, [])
         return [scored(chunk_id, score) for chunk_id, score in rows]
+
+
+# -- Streaming LLM fakes (OpenAI-compatible server-sent events) ---------------
+def pieces(text: str, size: int) -> list[str]:
+    return [text[i:i + size] for i in range(0, len(text), size)] if size else [text]
+
+
+def sse(deltas, usage=None) -> list[str]:
+    lines = [": keep-alive\n", "\n"]
+    for delta in deltas:
+        lines += ["data: " + json.dumps({"choices": [{"index": 0, "delta": {"content": delta}}]}) + "\n", "\n"]
+    if usage is not None:
+        lines.append("data: " + json.dumps({"choices": [], "usage": usage}) + "\n")
+    return lines + ["data: [DONE]\n", "data: " + json.dumps({"choices": [{"delta": {"content": "late"}}]}) + "\n"]
+
+
+class FakeStreamTransport:
+    """SSE lines, logged as they are handed over; optionally drops the connection after N lines."""
+
+    def __init__(self, lines: list[str], *, log: list[str] | None = None, fail_at: int | None = None) -> None:
+        self.lines, self.log, self.fail_at = lines, log if log is not None else [], fail_at
+        self.requests: list[tuple[str, dict, dict, float]] = []
+
+    def __call__(self, url: str, body: dict, headers: dict, timeout: float):
+        self.requests.append((url, body, headers, timeout))
+        return self._lines()
+
+    def _lines(self):
+        for n, line in enumerate(self.lines):
+            if n == self.fail_at:
+                raise ConnectionResetError("connection dropped")
+            self.log.append(f"sent:{n}")
+            yield line

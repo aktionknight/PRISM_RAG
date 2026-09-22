@@ -7,6 +7,7 @@ runs against ``SynthesisEngine`` before Matangi's harness wires it in.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
 
@@ -15,13 +16,17 @@ import pytest
 from slrag.core.citations import find_markers
 from slrag.core.schemas import AnswerOutput, TelemetryEvent
 from slrag.core.session import SessionStore
+from slrag.synth.config import load_synth_config
 from slrag.synth.engine import SynthesisEngine, TurnInput
-from slrag.synth.generator import LLMGenerator, LLMResponse
+from slrag.synth.generator import LLMGenerator, LLMResponse, OpenAICompatibleClient
 from slrag.synth.renderer import render_claims
 from tests.helpers import (
+    FakeStreamTransport,
     FixtureRetriever,
     load_scenarios,
+    pieces,
     scenario_turns,
+    sse,
     turn_decisions,
     turn_evidence,
     turn_sub_intents,
@@ -306,3 +311,32 @@ async def test_restructure_requests_never_call_the_llm():
         RestyleLLM(_restated), "Can you repeat that in two bullets?", "presentation_restructure")
     assert llm.calls == 0 and v2.usage.llm_calls == 0 and render["restyle"] is None
     assert len(v2.output.answer.splitlines()) == 2
+
+
+async def test_streaming_llm_shows_the_first_sentence_before_generation_ends():
+    """Audit W-1: with stream: true the first PROVISIONAL event precedes the end of the LLM stream."""
+    claims = [
+        {"intent_id": "i1", "facet": "venue_capacity", "text": "Venue A holds up to 40 people.",
+         "citations": ["Doc_12 §2"]},
+        {"intent_id": "i2", "facet": "cancellation_terms",
+         "text": "Cancellations made more than 14 days before the event receive a full refund.",
+         "citations": ["Doc_31 §4"]},
+    ]
+    log: list[str] = []
+    transport = FakeStreamTransport(sse(pieces(json.dumps({"claims": claims}), 6)), log=log)
+    config = copy.deepcopy(load_synth_config())
+    config["generator"]["openai_compatible"]["stream"] = True
+    client = OpenAICompatibleClient(config, stream_transport=transport)
+    engine = SynthesisEngine("sess_stream_llm", generator=LLMGenerator(client, config=config))
+    turn = scenario_turns("example1_multi_intent")[0]
+    async for item in engine.stream_turn(_turn_input(turn)):
+        if getattr(item, "kind", None) == "provisional":
+            log.append(f"provisional:{item.seq}")
+        result = item
+
+    last_content = max(n for n, line in enumerate(transport.lines) if '"content"' in line and "late" not in line)
+    assert log.index("provisional:0") < log.index(f"sent:{last_content}")
+    assert [c["text"] for c in result.extensions["claims"]] == [c["text"] for c in claims]
+    generation = next(e for e in result.telemetry if e.component == "synthesis.generation")
+    assert generation.payload["llm_calls"] == 1 and generation.payload["first_draft_ms"] is not None
+    _assert_contract(result)

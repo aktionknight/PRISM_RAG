@@ -15,6 +15,7 @@ from slrag.core.schemas import Claim, SubIntent
 from slrag.synth import generator as generator_module
 from slrag.synth.config import load_synth_config
 from slrag.synth.generator import (
+    ClaimStreamParser,
     ExtractiveGenerator,
     LLMGenerator,
     LLMResponse,
@@ -25,7 +26,15 @@ from slrag.synth.generator import (
     parse_claim_objects,
 )
 from slrag.synth.types import DraftClaim
-from tests.helpers import scenario_turns, scored, turn_evidence, turn_sub_intents
+from tests.helpers import (
+    FakeStreamTransport,
+    pieces,
+    scenario_turns,
+    scored,
+    sse,
+    turn_evidence,
+    turn_sub_intents,
+)
 
 LABEL_RE = re.compile(r"[^\s\[\]\"]+ §[^\s\[\]\",;]+")
 
@@ -409,3 +418,118 @@ def test_hc2_no_prompt_text_in_generator_source():
         and id(node) not in docstrings and len(node.value) > 120
     ]
     assert long_literals == []
+
+
+# ---------------------------------------------------------------------------
+# Streaming (audit W-1): SSE client + incremental claim parsing
+# ---------------------------------------------------------------------------
+OTHER_CLAIM = {"intent_id": "i2", "facet": "cancellation_terms",
+               "text": "Cancellations made more than 14 days before the event receive a full refund.",
+               "citations": ["Doc_31 §4"]}
+TRICKY_CLAIM = {"intent_id": "i1", "facet": "venue_capacity",
+                "text": 'Venue A {main hall} holds "up to" 40 people}.', "citations": ["Doc_12 §2"]}
+
+
+@pytest.mark.parametrize("size", [1, 7, 0])
+@pytest.mark.parametrize("raw", [
+    _claims_json(GOOD_CLAIM, OTHER_CLAIM),
+    json.dumps([GOOD_CLAIM, TRICKY_CLAIM]),
+    json.dumps(GOOD_CLAIM) + "\n" + json.dumps(OTHER_CLAIM),
+    "```json\n" + _claims_json(TRICKY_CLAIM) + "\n```",
+    _claims_json({**GOOD_CLAIM, "meta": {"k": 1}}),
+    '{"claims": [{"text": "cut off", "citat',
+    '{"claims": []}',
+    '{"claims": [{"facet": "venue_capacity"}]}',
+    "Sorry, I cannot help with that.",
+])
+def test_stream_parser_matches_the_whole_text_parser(raw, size):
+    parser = ClaimStreamParser()
+    items = [item for piece in pieces(raw, size) for item in parser.feed(piece)]
+    items += parser.finish()
+    assert (items, parser.broken) == parse_claim_objects(raw)
+
+
+@pytest.mark.parametrize("size", [1, 7, 0])
+def test_stream_parser_counts_one_broken_claim_for_truncated_output(size):
+    raw = _claims_json(GOOD_CLAIM)[:-2] + ', {"text": "cut off", "citat'
+    parser = ClaimStreamParser()
+    items = [item for piece in pieces(raw, size) for item in parser.feed(piece)] + parser.finish()
+    assert items == [GOOD_CLAIM] and parser.broken == 1
+    whole_items, whole_broken = parse_claim_objects(raw)      # the whole-text parser also counts the
+    assert whole_items == items and whole_broken >= 1         # unclosed wrapper; streaming is exact
+
+
+def test_stream_parser_yields_each_claim_as_its_object_closes():
+    raw = _claims_json(GOOD_CLAIM, OTHER_CLAIM)
+    cut = raw.index("}") + 1                       # end of the first claim object
+    parser = ClaimStreamParser()
+    assert parser.feed(raw[:cut]) == [GOOD_CLAIM]
+    assert parser.feed(raw[cut:cut + 20]) == []
+    assert parser.feed(raw[cut + 20:]) == [OTHER_CLAIM]
+    assert parser.finish() == [] and parser.broken == 0
+
+
+def _streaming_client(transport: FakeStreamTransport, **overrides) -> OpenAICompatibleClient:
+    return OpenAICompatibleClient(_client_config(stream=True, **overrides), transport=FakeTransport({}),
+                                  stream_transport=transport)
+
+
+async def test_client_stream_request_shape_deltas_and_usage():
+    transport = FakeStreamTransport(sse(["{\"cla", "ims\": []}"], usage={"prompt_tokens": 50, "completion_tokens": 4}))
+    client = _streaming_client(transport)
+    deltas = [delta async for delta in client.stream("PROMPT", json_schema=claims_json_schema(["Doc_12 §2"], ["i1"]))]
+
+    _, body, _, _ = transport.requests[0]
+    assert body["stream"] is True and body["stream_options"] == {"include_usage": True}
+    assert body["response_format"]["type"] == "json_schema"
+    assert deltas == ['{"cla', 'ims": []}']                     # comments, blanks and post-[DONE] lines ignored
+    assert client.last_usage == LLMResponse('{"claims": []}', 50, 4)
+
+
+async def test_client_stream_estimates_usage_without_a_usage_chunk():
+    client = _streaming_client(FakeStreamTransport(sse(["one two", " three"])), stream_usage=False)
+    assert [d async for d in client.stream("a b c d")] == ["one two", " three"]
+    assert (client.last_usage.prompt_tokens, client.last_usage.completion_tokens) == (4, 3)
+    assert "stream_options" not in client.build_request("x", stream=True)[1]
+
+
+async def test_llm_generator_streams_drafts_before_the_response_finishes():
+    raw = _claims_json(GOOD_CLAIM, OTHER_CLAIM)
+    log: list[str] = []
+    transport = FakeStreamTransport(sse(pieces(raw, 8), usage={"prompt_tokens": 900, "completion_tokens": 60}),
+                                    log=log)
+    generator = LLMGenerator(_streaming_client(transport))
+    drafts = []
+    async for draft in generator.generate(*_inputs("example1_multi_intent")):
+        log.append(f"draft:{draft.seq}")
+        drafts.append(draft)
+
+    assert [d.text for d in drafts] == [GOOD_CLAIM["text"], OTHER_CLAIM["text"]]
+    last_content_line = max(i for i, line in enumerate(transport.lines) if '"content"' in line and "late" not in line)
+    assert log.index("draft:0") < log.index(f"sent:{last_content_line}")       # TTFT: before the stream ends
+    assert len(transport.requests) == 1 and generator.usage.llm_calls == 1     # still one call (HC-5)
+    assert (generator.usage.prompt_tokens, generator.usage.completion_tokens) == (900, 60)
+    assert 0 <= generator.usage.first_draft_ms <= generator.usage.latency_ms
+    assert generator.parse_errors == 0
+
+
+async def test_llm_generator_keeps_streamed_drafts_when_the_connection_drops():
+    raw = _claims_json(GOOD_CLAIM, OTHER_CLAIM)
+    lines = sse(pieces(raw, 8))
+    inside_second = raw.index('{"intent_id": "i2"') + 10
+    drop = 2 + 2 * (inside_second // 8)             # 2 preamble lines, then a data line + blank per piece
+    generator = LLMGenerator(_streaming_client(FakeStreamTransport(lines, fail_at=drop)))
+    drafts = await _collect(generator.generate(*_inputs("example1_multi_intent")))
+
+    assert [d.text for d in drafts] == [GOOD_CLAIM["text"]]
+    assert "ConnectionResetError" in (generator.last_error or "")
+    assert generator.usage.llm_calls == 1 and generator.parse_errors == 1      # truncated second claim, no retry
+
+
+async def test_streaming_off_uses_one_blocking_completion():
+    transport = FakeTransport({"choices": [{"message": {"content": _claims_json(GOOD_CLAIM)}}]})
+    stream = FakeStreamTransport([])
+    client = OpenAICompatibleClient(_client_config(stream=False), transport=transport, stream_transport=stream)
+    drafts = await _collect(LLMGenerator(client).generate(*_inputs("example1_multi_intent")))
+    assert [d.text for d in drafts] == [GOOD_CLAIM["text"]]
+    assert len(transport.requests) == 1 and stream.requests == []

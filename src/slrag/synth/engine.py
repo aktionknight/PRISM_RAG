@@ -510,6 +510,7 @@ class _Telemetry:
             latency_ms,
             {"llm_calls": usage.llm_calls, "prompt_tokens": usage.prompt_tokens,
              "completion_tokens": usage.completion_tokens, "backend": usage.backend,
+             "first_draft_ms": usage.first_draft_ms,
              "sentences": len(results), "committed": sum(r.ok for r in results),
              "retracted": sum(not r.ok for r in results),
              "fabricated_ids_stripped": verifier.fabricated_ids_stripped},

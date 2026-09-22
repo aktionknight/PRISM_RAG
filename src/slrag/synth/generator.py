@@ -8,8 +8,10 @@ streamer (S-5) can verify sentence N while N+1 is still arriving.
 Backends (``config/synth.yaml`` ``generator.backend``):
   * ``extractive`` — deterministic, offline, zero LLM calls (CI / golden replay);
   * ``openai_compatible`` — Qwen2.5-7B-Instruct on local Ollama/vLLM: exactly one
-    ``complete`` call per ``generate`` (HC-5), json-schema mode constrains
-    citations to the allowlist enum (S-6 layer 2).
+    request per ``generate`` (HC-5), json-schema mode constrains citations to the
+    allowlist enum (S-6 layer 2). With ``stream: true`` the request streams and
+    each claim is yielded as soon as its JSON object closes, so the first
+    sentence reaches the verifier before the rest is generated.
 
 S-6 layer 1: ``allowed_ids`` is built from the chunks passed in and nothing
 else; the prompts (``config/prompts/*.jinja``, HC-2) forbid any other label and
@@ -28,7 +30,7 @@ import re
 import time
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Callable, Iterable, Mapping, Protocol, Sequence
+from typing import Any, AsyncIterator, Callable, Iterable, Iterator, Mapping, Protocol, Sequence
 from urllib.parse import urlparse
 
 import jinja2
@@ -43,6 +45,7 @@ log = logging.getLogger(__name__)
 
 Evidence = Mapping[str, Sequence[RetrievedChunk]]
 Transport = Callable[[str, dict, dict, float], dict]   # (url, body, headers, timeout_s) -> parsed JSON
+StreamTransport = Callable[[str, dict, dict, float], Iterator[str]]   # same args -> SSE lines
 
 MODES = ("synthesize", "refine")
 _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
@@ -133,10 +136,26 @@ def _urllib_transport(url: str, body: dict, headers: dict, timeout: float) -> di
         return json.loads(response.read().decode("utf-8"))
 
 
-class OpenAICompatibleClient:
-    """``POST {base_url}/chat/completions`` against local Ollama/vLLM; one request per ``complete``."""
+def _urllib_stream_transport(url: str, body: dict, headers: dict, timeout: float) -> Iterator[str]:
+    """Server-sent-event lines of a streaming response; closing the iterator closes the connection."""
+    data = json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 (scheme/host vetted)
+        for raw in response:
+            yield raw.decode("utf-8", errors="replace")
 
-    def __init__(self, config: dict | None = None, *, transport: Transport | None = None) -> None:
+
+class OpenAICompatibleClient:
+    """``POST {base_url}/chat/completions`` against local Ollama/vLLM; one request per ``complete``
+    or ``stream`` call. With ``stream: true`` the generator uses ``stream`` (audit W-1)."""
+
+    def __init__(
+        self,
+        config: dict | None = None,
+        *,
+        transport: Transport | None = None,
+        stream_transport: StreamTransport | None = None,
+    ) -> None:
         opts = (config if config is not None else load_synth_config())["generator"]["openai_compatible"]
         self.base_url = str(opts["base_url"]).rstrip("/")
         self.model = str(opts["model"])
@@ -144,20 +163,30 @@ class OpenAICompatibleClient:
         self.max_tokens = int(opts["max_tokens"])
         self.timeout_s = float(opts["timeout_s"])
         self.json_schema_mode = bool(opts["json_schema_mode"])
+        self.streaming = bool(opts.get("stream", False))
+        self.stream_usage = bool(opts.get("stream_usage", True))
         self.api_key_env = opts.get("api_key_env")
         if urlparse(self.base_url).scheme not in ("http", "https"):
             raise ValueError(f"LLM base_url must be http(s): {self.base_url!r}")
         if not opts.get("allow_remote", False) and not is_local_endpoint(self.base_url):
             raise ValueError(f"HC-1: refusing non-local LLM endpoint {self.base_url!r} (set allow_remote)")
         self._transport = transport or _urllib_transport
+        self._stream_transport = stream_transport or _urllib_stream_transport
+        self.last_usage: LLMResponse | None = None
 
-    def build_request(self, prompt: str, json_schema: dict | None = None) -> tuple[str, dict, dict]:
+    def build_request(
+        self, prompt: str, json_schema: dict | None = None, *, stream: bool = False
+    ) -> tuple[str, dict, dict]:
         body: dict[str, Any] = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
+        if stream:
+            body["stream"] = True
+            if self.stream_usage:
+                body["stream_options"] = {"include_usage": True}
         if json_schema is not None and self.json_schema_mode:
             body["response_format"] = {
                 "type": "json_schema",
@@ -173,6 +202,67 @@ class OpenAICompatibleClient:
         url, body, headers = self.build_request(prompt, json_schema)
         data = await asyncio.to_thread(self._transport, url, body, headers, self.timeout_s)
         return _parse_completion(data, prompt)
+
+    async def stream(self, prompt: str, *, json_schema: dict | None = None) -> AsyncIterator[str]:
+        """Content deltas as the server sends them (still one request). ``last_usage`` is set at the end,
+        from the final usage chunk when the server sends one, else estimated from word counts."""
+        url, body, headers = self.build_request(prompt, json_schema, stream=True)
+        self.last_usage = None
+        lines = self._stream_transport(url, body, headers, self.timeout_s)
+        completion: list[str] = []
+        usage: dict = {}
+        try:
+            while (line := await asyncio.to_thread(next, lines, None)) is not None:
+                event = _sse_event(line)
+                if event is _SSE_DONE:
+                    break
+                if not isinstance(event, dict):
+                    continue
+                if isinstance(event.get("usage"), dict):
+                    usage = event["usage"]
+                delta = _stream_delta(event)
+                if delta:
+                    completion.append(delta)
+                    yield delta
+        finally:
+            close = getattr(lines, "close", None)
+            if callable(close):
+                try:
+                    await asyncio.to_thread(close)
+                except ValueError:          # still executing in a cancelled worker thread
+                    pass
+            text = "".join(completion)
+            prompt_tokens, completion_tokens = usage.get("prompt_tokens"), usage.get("completion_tokens")
+            self.last_usage = LLMResponse(
+                text=text,
+                prompt_tokens=prompt_tokens if isinstance(prompt_tokens, int) else len(prompt.split()),
+                completion_tokens=completion_tokens if isinstance(completion_tokens, int) else len(text.split()),
+            )
+
+
+_SSE_DONE = object()
+
+
+def _sse_event(line: str) -> Any:
+    """One SSE line -> parsed ``data:`` JSON, ``_SSE_DONE`` for ``[DONE]``, or None (comments, blanks, junk)."""
+    line = line.strip()
+    if not line.startswith("data:"):
+        return None
+    data = line[len("data:"):].strip()
+    if data == "[DONE]":
+        return _SSE_DONE
+    try:
+        return json.loads(data)
+    except ValueError:
+        return None
+
+
+def _stream_delta(event: dict) -> str:
+    choices = event.get("choices")
+    first = choices[0] if isinstance(choices, list) and choices else {}
+    delta = first.get("delta") if isinstance(first, dict) else None
+    content = delta.get("content") if isinstance(delta, dict) else None
+    return content if isinstance(content, str) else ""
 
 
 def _parse_completion(data: Any, prompt: str) -> LLMResponse:
@@ -224,6 +314,75 @@ def parse_claim_objects(text: str) -> tuple[list[Any], int]:
         pos = gap_start = end
     broken += "{" in body[gap_start:]
     return items, broken if items else max(broken, 1)
+
+
+class ClaimStreamParser:
+    """Incremental ``parse_claim_objects``: yields each claim the moment its closing brace arrives.
+
+    Objects are tracked by brace depth, outside of JSON strings. A closing object
+    that parses to a dict with ``"text"`` is a claim and is yielded at once; its
+    enclosing objects (``{"claims": [...]}``) are then never yielded themselves.
+    A top-level object that closes without having yielded a claim is unwrapped
+    like the non-streaming parser would (so a bare text-less object still counts
+    as broken downstream). ``finish()`` counts each unclosed claim as broken
+    (truncated output), and salvages with ``parse_claim_objects`` when the scan
+    found nothing at all.
+    """
+
+    def __init__(self) -> None:
+        self._text = ""
+        self._pos = 0
+        self._stack: list[list[Any]] = []        # [start offset, contains a yielded claim]
+        self._in_string = self._escaped = False
+        self.yielded = 0
+        self.broken = 0
+
+    def feed(self, delta: str) -> list[Any]:
+        self._text += delta
+        items: list[Any] = []
+        text = self._text
+        while self._pos < len(text):
+            ch = text[self._pos]
+            self._pos += 1
+            if self._in_string:
+                if self._escaped:
+                    self._escaped = False
+                elif ch == "\\":
+                    self._escaped = True
+                elif ch == '"':
+                    self._in_string = False
+            elif ch == '"' and self._stack:
+                self._in_string = True
+            elif ch == "{":
+                self._stack.append([self._pos - 1, False])
+            elif ch == "}" and self._stack:
+                start, holds_claim = self._stack.pop()
+                items.extend(self._close(text[start:self._pos], holds_claim))
+        self.yielded += len(items)
+        return items
+
+    def finish(self) -> list[Any]:
+        """Items only the whole-text salvage could find (usually none)."""
+        # Truncated mid-object: each unclosed object that held no claim is one lost claim.
+        self.broken += sum(1 for _, holds_claim in self._stack if not holds_claim)
+        if self.yielded:
+            return []
+        items, self.broken = parse_claim_objects(self._text)
+        return items
+
+    def _close(self, raw: str, holds_claim: bool) -> list[Any]:
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            self.broken += 1
+            return []
+        if isinstance(obj, dict) and "text" in obj:
+            for frame in self._stack:
+                frame[1] = True
+            return [obj]
+        if not self._stack and not holds_claim:
+            return _unwrap(obj)
+        return []
 
 
 def _strip_fences(text: str) -> str:
@@ -408,6 +567,7 @@ class LLMGenerator:
         self.usage = GenerationUsage(backend=self.backend)
         self.parse_errors = 0
         self.last_error: str | None = None
+        self._source_broken = 0
 
     def render_prompt(
         self,
@@ -461,11 +621,10 @@ class LLMGenerator:
             self.usage = GenerationUsage(backend=self.backend)
             return
         schema = claims_json_schema(allowed, [i.intent_id for i in intents]) if self.json_schema_mode else None
-        response = await self._complete_once(prompt, schema)
         scores = _label_scores(evidence)
         by_id = {intent.intent_id: intent for intent in intents}
         fallback = intents[0].facet if len(intents) == 1 else ""
-        for draft in self._drafts(response, by_id, fallback, scores):
+        async for draft in self._drafts(prompt, schema, by_id, fallback, scores):
             yield draft
 
     async def restyle(
@@ -485,52 +644,92 @@ class LLMGenerator:
             return
         prompt = self.prompts.render("present_only", claims=rows, instruction=instruction)
         schema = claims_json_schema(allowed, ()) if self.json_schema_mode else None
-        response = await self._complete_once(prompt, schema)
         scores = dict.fromkeys(allowed, 1.0)
         fallback = rows[0]["facet"] if len({row["facet"] for row in rows}) == 1 else ""
-        for draft in self._drafts(response, {}, fallback, scores):
+        async for draft in self._drafts(prompt, schema, {}, fallback, scores):
             yield draft
 
+    async def _drafts(
+        self,
+        prompt: str,
+        schema: dict | None,
+        intents: Mapping[str, SubIntent],
+        fallback_facet: str,
+        scores: Mapping[str, float],
+    ) -> AsyncIterator[DraftClaim]:
+        """Drafts from the single LLM call, each yielded as soon as its claim object is complete."""
+        seq = invalid = 0
+        async for item in self._items(prompt, schema):
+            draft = _item_to_draft(item, seq, intents, fallback_facet, scores)
+            if draft is None:
+                invalid += 1
+                continue
+            seq += 1
+            yield draft
+        self.parse_errors = self._source_broken + invalid
+
+    async def _items(self, prompt: str, schema: dict | None) -> AsyncIterator[Any]:
+        """Raw claim items from the one LLM call (HC-5): streamed when the client supports it
+        (audit W-1), else one blocking completion. A transport failure ends the call; items
+        already yielded stand, and there is no retry."""
+        started = time.perf_counter()
+        self._source_broken = 0
+        stream = getattr(self.client, "stream", None)
+        if not (getattr(self.client, "streaming", False) and callable(stream)):
+            response = await self._complete_once(prompt, schema)
+            if response is not None:
+                items, self._source_broken = parse_claim_objects(response.text)
+                for item in items:
+                    yield item
+            return
+
+        parser, first = ClaimStreamParser(), None
+        try:
+            async for delta in stream(prompt, json_schema=schema):
+                for item in parser.feed(delta):
+                    first = first if first is not None else _ms(started)
+                    yield item
+        except (OSError, ValueError) as exc:
+            self._fail(exc)
+        for item in parser.finish():
+            first = first if first is not None else _ms(started)
+            yield item
+        self._source_broken = parser.broken
+        reported = getattr(self.client, "last_usage", None)
+        self.usage = GenerationUsage(
+            llm_calls=1,
+            prompt_tokens=reported.prompt_tokens if reported else len(prompt.split()),
+            completion_tokens=reported.completion_tokens if reported else 0,
+            backend=self.backend,
+            latency_ms=_ms(started),
+            first_draft_ms=first,
+        )
+
     async def _complete_once(self, prompt: str, schema: dict | None) -> LLMResponse | None:
-        """The single LLM call (HC-5). Transport failures degrade to zero claims; no retry."""
+        """The single non-streaming LLM call (HC-5). Transport failures degrade to zero claims; no retry."""
         started = time.perf_counter()
         try:
             response = await self.client.complete(prompt, json_schema=schema)
         except (OSError, ValueError) as exc:
-            self.last_error = f"{type(exc).__name__}: {exc}"
-            log.warning("synthesis LLM call failed: %s", self.last_error)
+            self._fail(exc)
             self.usage = GenerationUsage(
                 llm_calls=1, prompt_tokens=len(prompt.split()), backend=self.backend, latency_ms=_ms(started)
             )
             return None
+        latency = _ms(started)
         self.usage = GenerationUsage(
             llm_calls=1,
             prompt_tokens=response.prompt_tokens,
             completion_tokens=response.completion_tokens,
             backend=self.backend,
-            latency_ms=_ms(started),
+            latency_ms=latency,
+            first_draft_ms=latency,
         )
         return response
 
-    def _drafts(
-        self,
-        response: LLMResponse | None,
-        intents: Mapping[str, SubIntent],
-        fallback_facet: str,
-        scores: Mapping[str, float],
-    ) -> list[DraftClaim]:
-        if response is None:
-            return []
-        items, broken = parse_claim_objects(response.text)
-        drafts: list[DraftClaim] = []
-        for item in items:
-            draft = _item_to_draft(item, len(drafts), intents, fallback_facet, scores)
-            if draft is None:
-                broken += 1
-            else:
-                drafts.append(draft)
-        self.parse_errors = broken
-        return drafts
+    def _fail(self, exc: Exception) -> None:
+        self.last_error = f"{type(exc).__name__}: {exc}"
+        log.warning("synthesis LLM call failed: %s", self.last_error)
 
 
 def _label_scores(evidence: Evidence) -> dict[str, float]:
