@@ -56,6 +56,7 @@ verifier:
 uncertainty:
   coverage_floor: 0.4                 # best rerank score below this and no claim -> uncovered
   ambiguity_margin: 0.05              # top-2 evidence docs within this margin and no claim -> ambiguous
+  clarification_max_words: 6          # longer differing spans fall back to citation labels as options
   entity_patterns:                    # anchor entities for entity x facet partial-coverage gaps
     - '\b(?:Venue|Hotel|Hall|Centre|Center|Campus|Office) [A-Z0-9]\b'
   templates:
@@ -69,6 +70,7 @@ uncertainty:
 # ---------------------------------------------------------------------------
 delta:
   pool_resolution_min_score: 0.5      # pool chunk must score >= this to resolve a target with 0 retrievals
+  additive_targets: true              # also target (active facet x new constraint) when no claim conflicts
   query_templates:                    # fallback when a slot value has no explicit query
     query_nl: "{facet_label} for {value_phrase}"
     search_string: "{value_phrase} {facet_label}"
@@ -125,6 +127,10 @@ presentation:
   anaphora: ['\bthat\b', '\bthis\b', '\bit\b', '\byour (?:last )?answer\b', '\bthe above\b',
              '\bwhat you (?:just )?said\b', '\bthe previous answer\b']
   number_words: {one: 1, two: 2, three: 3, four: 4, five: 5, six: 6}
+  styles:                              # verb -> render style; order matters (numbered before bullets)
+    numbered: [numbered]
+    bullets: [bullet, bullets, bulleted, list]
+    short: [shorten, shorter, summarise, summarize, condense, briefly]
   reasons:                             # suppression_reason values (02_SOLUTION_DESIGN presentation enum)
     default: presentation_restructure
     translate: translation
@@ -135,3 +141,4 @@ renderer:
   bullet_prefix: "- "
   numbered_format: "{n}. "
   short_max_claims_per_facet: 1        # "shorten" keeps the top claim per facet
+  triggers: [provisional, multi_intent, late_constraint, clarification_followup, final_confirm]  # A §6 enum
