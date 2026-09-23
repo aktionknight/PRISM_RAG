@@ -11,9 +11,12 @@ caller dispatches ``DeltaPlan.queries`` through Component 3. No module-level
 mutable state (HC-4). Slots, patterns, templates, cues and thresholds come from
 ``config/synth.yaml`` ``delta:`` / ``presentation:`` and ``config/facets.yaml`` (HC-2).
 
+Mixed turns (audit W-8): a refinement whose question clause asks about content
+the answer does not carry ("make it 40 people, and is AV equipment included?") is
+still a CONSTRAINT_REFINEMENT, flagged ``mixed`` so the harness runs Components 2-3
+for the new question while Component 4 applies the constraint as a delta.
+
 Known limitations (D3 edge cases):
-  * a turn mixing a constraint with a brand-new facet ("international, and what
-    about visas?") is classified CONSTRAINT_REFINEMENT — turn splitting is not done;
   * additive phrasing ("also for Mumbai") is treated as a replacement of the slot;
   * a lexical translate request naming the target language ("into Hindi") sees the
     language as a new proper noun; the controller's NO_RETRIEVAL decision covers it.
@@ -146,8 +149,7 @@ class ConstraintExtractor:
 class TurnClassifier:
     """NEW_INTENT | CONSTRAINT_REFINEMENT | PRESENTATION_ONLY (S-4 step 1, Example 3).
 
-    Known limitation: a turn mixing a constraint and a brand-new facet is classified
-    CONSTRAINT_REFINEMENT (turn splitting is a D3 edge case).
+    A refinement that also asks a new question is flagged ``mixed`` (audit W-8).
     """
 
     def __init__(
@@ -174,7 +176,19 @@ class TurnClassifier:
         self._format_count_re = (
             re.compile(r"\b\d+\s+(?:" + "|".join(map(re.escape, verbs)) + r")\b", re.IGNORECASE) if verbs else None
         )
-        self._cues = tuple(re.compile(p, re.IGNORECASE) for p in self.config.get("delta", {}).get("refinement_cues", ()))
+        delta_cfg = self.config.get("delta", {}) or {}
+        self._cues = tuple(re.compile(p, re.IGNORECASE) for p in delta_cfg.get("refinement_cues", ()))
+        question = [str(p) for p in delta_cfg.get("question_cues", ())]
+        self._question_re = re.compile("|".join(question), re.IGNORECASE) if question else None
+        self._clause_re = re.compile("|".join(map(str, delta_cfg.get("question_clause_splitters", ()) or [r"(?!)"])),
+                                     re.IGNORECASE)
+        self._follow_up_neutral = frozenset(tokenize(" ".join(map(str, delta_cfg.get("follow_up_neutral", ()) or ()))))
+        self._slot_patterns = [
+            re.compile(p, re.IGNORECASE)
+            for spec in (delta_cfg.get("slots") or {}).values()
+            for p in [*(spec.get("numeric_patterns") or ()),
+                      *(q for v in (spec.get("values") or {}).values() for q in (v or {}).get("patterns", ()))]
+        ]
         self._keywords = {
             facet: frozenset(tokenize(" ".join(map(str, spec.get("keywords", ()) or ()))))
             for facet, spec in self.facets.items()
@@ -203,8 +217,35 @@ class TurnClassifier:
         delta = ConstraintDelta(slots=changed, raw_text=utterance)
         # A new slot the current answer does not depend on only counts as a refinement with a cue.
         if changed and (self._depends_on(active, changed) or any(c.search(utterance) for c in self._cues)):
+            if self.asks_new_question(utterance, active, sub_intents):
+                return TurnClassification("CONSTRAINT_REFINEMENT", "constraint_delta_with_new_question", delta,
+                                          mixed=True)
             return TurnClassification("CONSTRAINT_REFINEMENT", "constraint_delta", delta)
         return TurnClassification("NEW_INTENT", "new_intent", delta)
+
+    def asks_new_question(self, utterance: str, active: Sequence[Claim], sub_intents: Sequence[SubIntent] = ()) -> bool:
+        """Does a refinement turn also ask about something the answer does not cover (W-8)?
+
+        After decomposition: a novel sub-intent on a facet the answer lacks. Before it
+        (``classify()`` at utterance end): a question clause (``delta.question_cues``)
+        with a content word that is not in the active claims, not part of a constraint
+        phrase, not a refinement cue and not a ``delta.follow_up_neutral`` word
+        ("does that change anything?" is about the constraint, not a new topic).
+        """
+        active_facets = {c.facet for c in active}
+        if any(s.novel and s.facet not in active_facets for s in sub_intents):
+            return True
+        if self._question_re is None:
+            return False
+        known = set(tokenize(" ".join(c.text for c in active))) | self._neutral | self._follow_up_neutral
+        for clause in self._clause_re.split(utterance):
+            if not clause or not self._question_re.search(clause):
+                continue
+            for pattern in (*self._slot_patterns, *self._cues):
+                clause = pattern.sub(" ", clause)
+            if any(tok not in known and not tok[0].isdigit() and len(tok) > 1 for tok in tokenize(clause)):
+                return True
+        return False
 
     def new_content_anchors(
         self,
@@ -275,6 +316,7 @@ class DeltaEngine:
         delta_cfg = self.config.get("delta", {}) or {}
         self._min_score = float(delta_cfg.get("pool_resolution_min_score", 0.5))
         self._additive = bool(delta_cfg.get("additive_targets", True))
+        self._keep_unreplaced = bool(delta_cfg.get("keep_unreplaced_session_scoped", True))
         self._templates = {**_DEFAULT_TEMPLATES, **(delta_cfg.get("query_templates") or {})}
         self._stopwords = stopwords_from(self.config)
 
@@ -385,6 +427,7 @@ class DeltaEngine:
         from_version = graph.version
         by_intent = {t.sub_intent.intent_id: t for t in plan.targets}
         new_ids: dict[str, list[str]] = {}
+        kept: list[str] = []
         with graph.revise() as rev:
             for result in committed:
                 if not result.ok:
@@ -405,6 +448,12 @@ class DeltaEngine:
             for claim_id in plan.affected:
                 by = [cid for t in plan.targets if claim_id in t.affected_claim_ids
                       for cid in new_ids.get(t.sub_intent.intent_id, ())]
+                if not by and self._keep_unreplaced and not self.content_scoped(graph.get(claim_id), plan.delta):
+                    # The targeted query found nothing, and the claim only inherited the old value
+                    # from the session ("on-site catering for up to 80 guests" under headcount=30):
+                    # it is still true, so it stays rather than silently vanishing.
+                    kept.append(claim_id)
+                    continue
                 rev.supersede(claim_id, superseded_by=list(dict.fromkeys(by)))
         lineage = rev.lineage
 
@@ -422,8 +471,16 @@ class DeltaEngine:
             citations_added=[label for label in self._citations(graph, added) if label not in preserved],
             pool_resolved_targets=sum(t.resolved_from_pool for t in plan.targets),
             latency_ms=latency_ms,
+            affected_kept=len(kept),
         )
         return lineage, report
+
+    def content_scoped(self, claim: Claim, delta: ConstraintDelta) -> bool:
+        """Does the claim's own text state the old value of a slot the delta changes?"""
+        return any(
+            self.extractor.mentions(slot, str(claim.preconditions[slot]), claim.text)
+            for slot in _conflicting_slots(claim.preconditions, delta)
+        )
 
     @staticmethod
     def _citations(graph: ClaimGraph, claim_ids: Iterable[str]) -> list[str]:

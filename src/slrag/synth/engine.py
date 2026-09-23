@@ -274,7 +274,12 @@ class SynthesisEngine:
              "delta_queries": [q.search_string for q in queries]},
         )
 
-        targeted = [t.sub_intent for t in plan.targets]
+        # Mixed turn (W-8): the upstream pass ran for the new question only; its novel
+        # sub-intents are answered in the same single generator call as the delta.
+        new_intents = [s for s in turn.sub_intents if s.novel] if classification.mixed else []
+        for intent in new_intents:
+            evidence[intent.intent_id] = list(turn.evidence.get(intent.intent_id, ()))
+        targeted = [t.sub_intent for t in plan.targets] + new_intents
         for intent in targeted:
             self._intents[intent.intent_id] = intent
             self._intent_evidence.setdefault(intent.intent_id, []).extend(evidence.get(intent.intent_id, []))
@@ -302,6 +307,8 @@ class SynthesisEngine:
             delta_queries_issued=len(queries),
             latency_ms=_ms(started),
         )
+        report.new_intents = len(new_intents)
+        self._retire_replaced_intents(plan, targeted)
         self.session_constraints = merged
         telemetry.add("refinement", report.latency_ms, report.to_event())
         if lineage is not None:
@@ -482,6 +489,24 @@ class SynthesisEngine:
             telemetry=telemetry.events,
             fabricated_id_count=_fabricated(citations, self.graph.known_labels()),
         )
+
+    def _retire_replaced_intents(self, plan: Any, targeted: Sequence[SubIntent]) -> None:
+        """A delta target succeeds earlier intents on its facet that no longer back any
+        active claim, so coverage reports the target's outcome instead of flagging the
+        superseded V1 intent as unverified."""
+        active = {c.claim_id for c in self.graph.active()}
+        backing = {self.graph.meta(claim_id).intent_id for claim_id in active}
+        # A target that found nothing while every claim it affected was kept changed nothing;
+        # its facet is still answered, so it must not add an "unverified" line either.
+        idle = {t.sub_intent.intent_id for t in plan.targets
+                if t.affected_claim_ids and t.sub_intent.intent_id not in backing
+                and set(t.affected_claim_ids) <= active}
+        current = {intent.intent_id for intent in targeted} - idle
+        facets = {t.facet for t in plan.targets}
+        for intent_id, intent in list(self._intents.items()):
+            if intent_id in idle or (intent.facet in facets and intent_id not in current and intent_id not in backing):
+                del self._intents[intent_id]
+                self._intent_evidence.pop(intent_id, None)
 
     def _pool_chunks(self) -> list[RetrievedChunk]:
         """Session EvidencePool (Component 3) if wired, else everything this session has seen."""

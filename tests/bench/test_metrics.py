@@ -56,8 +56,9 @@ def test_golden_replay_passes_every_g4_g5_gate(golden):
     g4, g5 = summary["g4"], summary["g5"]
     assert g4["fabricated_id_count"] == 0 and g4["citation_support_rate"] == 1.0
     assert g4["uncertainty_precision"] == 1.0 and g4["uncertainty_recall"] == 1.0
-    assert g5["refinements"] == 1 and g5["full_corpus_searches_on_refinement"] == 0
-    assert g5["claims_retained_pct"] == pytest.approx(0.75)              # Example 2: 3 retained, 1 superseded
+    assert g5["refinements"] == 2 and g5["full_corpus_searches_on_refinement"] == 0
+    # Example 2 retains 3 / supersedes 1; the self-correction edge case retains 4 / supersedes 3.
+    assert g5["claims_retained_pct"] == pytest.approx(7 / 11)
     assert g5["delta_queries_per_refinement"] == 2
     assert g5["presentation"] == {"turns": 1, "retrieval_events": 0, "citation_subset_violations": [],
                                   "version_changes": []}

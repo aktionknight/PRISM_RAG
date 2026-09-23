@@ -126,5 +126,48 @@
         }
       }
     ]
+  },
+
+  "edge_self_correction_mixed": {
+    "_doc": "D3 edge case (audit W-8): a self-correction (headcount 30 -> 40) mixed with a new question. The headcount is a delta on the capacity claims; the AV question goes upstream. Catering claims only inherited headcount=30 from the session and their delta query finds nothing, so they are kept, not dropped.",
+    "stream": "golden_edge_self_correction_mixed.jsonl",
+    "session_prefix": "example1_multi_intent",
+    "turns": [
+      {
+        "turn_id": 2,
+        "utterance": "Make it 40 people, and is AV equipment included?",
+        "t_s_end": 3.0,
+        "controller_decisions": [
+          {"t_s": 2.9, "decision": "RETRIEVE", "reason": "corpus_discriminative", "confidence": 0.74}
+        ],
+        "sub_intents": [
+          {"intent_id": "i4", "facet": "logistics", "query_nl": "is AV equipment included at the venues", "search_string": "venue AV equipment included", "novel": true}
+        ],
+        "evidence": {
+          "i4": [["Doc_12#3#0", 0.8]]
+        },
+        "retrieval_events": [
+          {"timestamp_s": 2.9, "query": "venue AV equipment included", "trigger": "multi_intent"}
+        ],
+        "delta_evidence": {
+          "40 attendees Venue capacity": [["Doc_12#2#0", 0.9]]
+        },
+        "expected": {
+          "turn_type": "CONSTRAINT_REFINEMENT",
+          "mixed": true,
+          "upstream": true,
+          "answer_version": 2,
+          "constraint_delta": {"headcount": "40"},
+          "refinement": {
+            "event": "answer_refined", "from_version": 1, "to_version": 2,
+            "claims_retained": 4, "claims_superseded": 3, "claims_added": 5,
+            "delta_queries_issued": 2, "full_corpus_searches": 0, "session_cleared": false,
+            "new_intents": 1, "affected_kept": 2
+          },
+          "citations_include": ["Doc_09 §1", "Doc_12 §2", "Doc_12 §3", "Doc_31 §4"],
+          "uncertainty": "Catering accommodation policies for Venue A could not be verified from the retrieved corpus."
+        }
+      }
+    ]
   }
 }

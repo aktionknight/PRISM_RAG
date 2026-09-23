@@ -130,6 +130,30 @@ async def test_example2_refinement_is_a_delta_not_a_restart():
     _assert_contract(v2)
 
 
+async def test_self_correction_mixed_with_a_new_question():
+    """Audit W-8 edge case: the constraint is a delta, the new question goes upstream, nothing true is lost."""
+    engine, retriever, turns, (v1, v2) = await _run("edge_self_correction_mixed")
+    expected = turns[-1]["expected"]
+
+    assert v2.turn_type == expected["turn_type"] and v2.classification.mixed is expected["mixed"]
+    assert v2.classification.needs_upstream_retrieval is expected["upstream"]
+    assert dict(v2.classification.delta.slots) == expected["constraint_delta"]
+    event = v2.refinement.to_event()
+    assert {k: event[k] for k in expected["refinement"]} == expected["refinement"]
+    assert set(v2.output.citations) == set(expected["citations_include"])
+    assert v2.output.uncertainty == expected["uncertainty"]
+    assert v2.output.answer_version == expected["answer_version"]
+    # V1 catering claims only inherited headcount=30 and their delta query found nothing: kept verbatim.
+    v1_catering = [c for c in v1.extensions["claims"] if c["facet"] == "catering_options"]
+    assert v1_catering and all(c in v2.extensions["claims"] for c in v1_catering)
+    # The new question was answered from its upstream evidence, in the same single generator call.
+    assert any(c["facet"] == "logistics" and "AV equipment" in c["text"] for c in v2.extensions["claims"])
+    assert "is AV equipment included at the venues" in v2.output.sub_queries
+    assert [q.search_string for q in retriever.calls] == ["40 attendees Venue capacity", "40 attendees Catering options"]
+    assert v2.usage.llm_calls == 0                                   # extractive backend; <= 1 on the LLM path
+    _assert_contract(v2)
+
+
 class ExplodingRetriever:
     def __call__(self, sub_intent):
         raise AssertionError("presentation-only turns must never reach retrieval")
@@ -238,7 +262,8 @@ async def test_pre_decomposition_routing_reproduces_every_golden_scenario(name):
     _, routed, retriever, upstream_passes = await _run_routed(name)
 
     assert [r.output.model_dump() for r in routed] == [r.output.model_dump() for r in golden]
-    assert upstream_passes == sum(t["expected"]["turn_type"] == "NEW_INTENT" for t in turns if "expected" in t)
+    assert upstream_passes == sum(t["expected"].get("upstream", t["expected"]["turn_type"] == "NEW_INTENT")
+                                  for t in turns if "expected" in t)
     assert all(r.telemetry[0].payload["precomputed"] for r in routed)
     assert not any(r.telemetry[0].payload["stale"] for r in routed)
     if name == "example2_refinement":

@@ -95,6 +95,7 @@ uncertainty:
 delta:
   pool_resolution_min_score: 0.5      # pool chunk must score >= this to resolve a target with 0 retrievals
   additive_targets: true              # also target (active facet x new constraint) when no claim conflicts
+  keep_unreplaced_session_scoped: true   # keep an affected claim whose delta query found nothing if its text never stated the old value
   query_templates:                    # fallback when a slot value has no explicit query
     query_nl: "{facet_label} for {value_phrase}"
     search_string: "{value_phrase} {facet_label}"
@@ -107,6 +108,11 @@ delta:
     - '\bthe trip was\b'
     - '\bmake it\b'
     - '\bchange (?:it|that) to\b'
+  question_cues: ['\?', '\bwhat about\b', '\bhow about\b', '\b(?:what|which|how|where|when|why|who)\b',
+                  '\b(?:is|are|do|does|can|could|will) (?:there|i|we|it|they)\b']   # a clause asking something (W-8)
+  question_clause_splitters: ['[.;!?]\s+', ',\s+', '\s+[-–—]+\s+', '\s+and\s+(?=(?:what|which|how|is|are|do|does|can)\b)']
+  follow_up_neutral: [change, changes, affect, affects, apply, applies, still, mean, means, anything, differ,
+                      different, difference, update, now, then, happen, happens, else, work, works, rule, rules]
   slots:
     trip_type:
       values:

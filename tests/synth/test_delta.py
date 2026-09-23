@@ -327,3 +327,71 @@ def test_additive_targets_can_be_disabled_for_ablation():
     _build_v1(engine, graph, [("travel_reimbursement", CORPUS["Doc_44#2#0"])], {})
     delta = ConstraintDelta(slots={"trip_type": "international"})
     assert engine.plan(graph, delta, pool=graph.evidence()).targets == []
+
+
+# -- Audit W-8: mixed turns + self-correction ------------------------------------------
+@pytest.mark.parametrize("utterance", [
+    "Make it 40 people, and is AV equipment included?",
+    "Make it 40 people - what about parking?",
+])
+def test_refinement_with_a_new_question_is_mixed(engine, example1_graph, utterance):
+    graph, session = example1_graph
+    result = engine.classifier.classify(utterance, graph, session_constraints=session)
+    assert result.turn_type == "CONSTRAINT_REFINEMENT" and result.mixed
+    assert dict(result.delta.slots) == {"headcount": "40"}
+    assert result.needs_upstream_retrieval                       # the new question goes through Components 2-3
+
+
+@pytest.mark.parametrize("utterance", [
+    "Actually make it 40 people.",
+    "Actually it's 40 people, does that change anything?",
+    "Can you make it for 40 people?",
+])
+def test_pure_refinement_is_not_mixed(engine, example1_graph, utterance):
+    graph, session = example1_graph
+    result = engine.classifier.classify(utterance, graph, session_constraints=session)
+    assert result.turn_type == "CONSTRAINT_REFINEMENT" and not result.mixed
+    assert not result.needs_upstream_retrieval
+
+
+def test_novel_sub_intent_on_an_unanswered_facet_makes_a_refinement_mixed(engine, example1_graph):
+    graph, session = example1_graph
+    novel = SubIntent(intent_id="i9", facet="logistics", query_nl="parking", search_string="parking", novel=True)
+    old = SubIntent(intent_id="i8", facet="venue_capacity", query_nl="capacity", search_string="capacity", novel=True)
+    assert engine.classifier.classify("Make it 40 people.", graph, session_constraints=session,
+                                      sub_intents=[novel]).mixed
+    assert not engine.classifier.classify("Make it 40 people.", graph, session_constraints=session,
+                                          sub_intents=[old]).mixed
+
+
+def test_unreplaced_session_scoped_claims_are_kept(engine, example1_graph):
+    """Self-correction 30 -> 40: a claim that only inherited headcount=30 is not dropped when its query finds nothing."""
+    graph, session = example1_graph
+    catering = next(c for c in graph.active() if c.facet == "catering_options")
+    delta = ConstraintDelta(slots={"headcount": "40"})
+    assert catering.preconditions.get("headcount") == "30" and not engine.content_scoped(catering, delta)
+    plan = engine.plan(graph, delta, pool=(), turn_id=2)
+    assert catering.claim_id in plan.affected
+    lineage, report = engine.apply(graph, plan, [], session_constraints=merge_constraints(session, delta),
+                                   delta_queries_issued=len(plan.queries))
+    assert lineage is None or catering.claim_id not in lineage.superseded
+    assert graph.get(catering.claim_id).status == "active" and report.affected_kept >= 1
+
+
+def test_content_scoped_claims_are_still_superseded(engine):
+    graph = ClaimGraph("sess_scoped")
+    (cid,) = _build_v1(engine, graph, [("venue_capacity", CORPUS["Doc_12#2#0"])], {"headcount": "30"})
+    claim = graph.get(cid)
+    assert engine.content_scoped(claim, ConstraintDelta(slots={"headcount": "40"}))   # text says "30 attendees"
+
+
+def test_keeping_unreplaced_claims_can_be_disabled(example1_graph):
+    config = load_synth_config()
+    config["delta"]["keep_unreplaced_session_scoped"] = False
+    strict = DeltaEngine(config)
+    graph, session = example1_graph
+    delta = ConstraintDelta(slots={"headcount": "40"})
+    plan = strict.plan(graph, delta, pool=(), turn_id=2)
+    lineage, report = strict.apply(graph, plan, [], session_constraints=merge_constraints(session, delta),
+                                   delta_queries_issued=len(plan.queries))
+    assert set(lineage.superseded) == set(plan.affected) and report.affected_kept == 0

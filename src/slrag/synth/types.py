@@ -129,15 +129,20 @@ class TurnClassification:
     # SynthesisEngine turn counter when classify() ran; handle_turn() re-classifies if
     # another turn ran on the session in between (audit N-3). None = not stamped.
     session_epoch: int | None = None
+    # A refinement that also asks something the answer does not cover ("make it 40
+    # people, and is AV included?"): the constraint is applied as a delta AND the new
+    # question goes through Components 2-3 (audit W-8).
+    mixed: bool = False
 
     @property
     def needs_upstream_retrieval(self) -> bool:
         """Whether Components 2-3 should decompose and retrieve for this turn (audit C-3).
 
         Refinement turns issue only Component 4's targeted delta queries, and
-        presentation turns retrieve nothing, so both skip the full upstream pass.
+        presentation turns retrieve nothing, so both skip the full upstream pass;
+        a mixed refinement runs it for its new question only.
         """
-        return self.turn_type == "NEW_INTENT"
+        return self.turn_type == "NEW_INTENT" or self.mixed
 
 
 @dataclass(frozen=True)
@@ -204,6 +209,8 @@ class RefinementReport:
     latency_ms: float = 0.0
     full_corpus_searches: int = 0        # structurally 0: the delta path only issues targeted queries
     session_cleared: bool = False
+    new_intents: int = 0                 # mixed turn: novel sub-intents answered alongside the delta (W-8)
+    affected_kept: int = 0               # affected but session-scoped claims kept: their delta query found nothing
 
     def to_event(self) -> dict[str, Any]:
         return {
@@ -219,6 +226,8 @@ class RefinementReport:
             "citations_added": list(self.citations_added),
             "pool_resolved_targets": self.pool_resolved_targets,
             "session_cleared": self.session_cleared,
+            "new_intents": self.new_intents,
+            "affected_kept": self.affected_kept,
             "latency_ms": self.latency_ms,
         }
 
