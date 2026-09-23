@@ -35,6 +35,7 @@ from slrag.synth.text import (
     extract_proper_nouns,
     overlap,
     split_clauses,
+    split_sentences,
     stopwords_from,
 )
 from slrag.synth.types import DraftClaim, StreamEvent, VerificationResult
@@ -167,6 +168,7 @@ class CrossEncoderNLIScorer:
 
         self._model = CrossEncoder(str(path), max_length=int(cfg.get("max_length", 256)))
         self._lock = threading.Lock()   # fast tokenizers are not safe under concurrent threads
+        self._window = int(cfg.get("premise_window_sentences", 2))
 
     def probabilities(self, pairs: Sequence[tuple[str, str]]) -> list[list[float]]:
         """Softmax over the label logits, one row per (premise, hypothesis) pair, config label order."""
@@ -177,14 +179,40 @@ class CrossEncoderNLIScorer:
         return [_softmax([float(x) for x in row]) for row in logits]
 
     def score(self, premise: str, hypothesis: str) -> float:
-        return self.probabilities([(premise, hypothesis)])[0][self._entailment]
+        return self.score_batch([(premise, hypothesis)])[0]
 
     def score_batch(self, pairs: Sequence[tuple[str, str]]) -> list[float]:
-        return [row[self._entailment] for row in self.probabilities(pairs)]
+        """Entailment per pair = max over the premise's sentence windows, in one ``predict`` call.
+
+        A short claim scored against a whole multi-sentence chunk is often judged
+        neutral or contradicted by the chunk's other sentences ("Venue A holds up to
+        40 people." vs a three-sentence chunk: P(entail) ~ 0.001), so each window of
+        up to ``premise_window_sentences`` consecutive sentences is scored too.
+        """
+        expanded: list[tuple[str, str]] = []
+        owners: list[int] = []
+        for n, (premise, hypothesis) in enumerate(pairs):
+            for window in premise_windows(premise, self._window):
+                expanded.append((window, hypothesis))
+                owners.append(n)
+        best = [0.0] * len(pairs)
+        for owner, row in zip(owners, self.probabilities(expanded)):
+            best[owner] = max(best[owner], row[self._entailment])
+        return best
 
     def contradiction(self, premise: str, hypothesis: str) -> float:
         """P(contradiction) — reusable by Component 3's contradiction gating."""
         return self.probabilities([(premise, hypothesis)])[0][self._contradiction]
+
+
+def premise_windows(premise: str, size: int) -> list[str]:
+    """The whole premise, then every run of 1..``size`` consecutive sentences (deduplicated)."""
+    sentences = split_sentences(premise)
+    windows = [premise]
+    for width in range(1, max(0, size) + 1):
+        for start in range(len(sentences) - width + 1):
+            windows.append(" ".join(sentences[start:start + width]))
+    return list(dict.fromkeys(windows))
 
 
 def _softmax(logits: Sequence[float]) -> list[float]:
@@ -192,6 +220,20 @@ def _softmax(logits: Sequence[float]) -> list[float]:
     exps = [math.exp(x - peak) for x in logits]
     total = sum(exps)
     return [e / total for e in exps]
+
+
+def threshold_for(config: dict[str, Any] | None = None) -> float:
+    """Entailment threshold for the configured backend.
+
+    NLI probabilities and lexical overlap live on different scales, so the
+    cross-encoder may set its own ``verifier.cross_encoder.entailment_threshold``
+    (calibrated by ``bench/calibrate_nli.py``); otherwise ``entailment_threshold``.
+    """
+    cfg = _config(config).get("verifier", {})
+    own = (cfg.get("cross_encoder") or {}).get("entailment_threshold")
+    if cfg.get("entailment_backend") == "cross_encoder" and own is not None:
+        return float(own)
+    return float(cfg.get("entailment_threshold", 0.6))
 
 
 def make_scorer(config: dict[str, Any] | None = None) -> EntailmentScorer:
@@ -223,38 +265,75 @@ def copy_check(sentence: str, premises: Sequence[str]) -> tuple[str, ...]:
 
 
 class PolarityCheck:
-    """Catches a sentence that reuses a chunk's words with the opposite polarity (audit W-4).
+    """Catches a sentence that reuses a chunk's words with the opposite polarity (audit W-4, N-1).
 
     Lexical entailment drops "not"/"no" as stopwords, so "card statements are
     accepted" scores 1.0 against "card statements alone are not accepted". Each
     clause of the sentence is aligned to the premise clause covering most of its
-    content tokens, and the two must agree on the parity of negation cues
-    (``verifier.negation_cues`` plus "n't"). When several premise clauses tie as
-    best match, the sentence passes if any of them agrees.
+    content tokens, and the two must agree on polarity. When several premise
+    clauses tie as best match, the sentence passes if any of them agrees.
+
+    Polarity = parity of negation cues (``verifier.negation_cues`` plus "n't"), minus
+    exempt phrases that are not negations ("not only", "no more than"), XOR the parity
+    of antonym swaps: a clause term whose antonym (``verifier.antonym_pairs``) is in the
+    aligned premise clause while the term itself is not ("refunded" vs "forfeit",
+    "rejected" vs "accepted"). So "rejected" still agrees with "not accepted".
+    Clauses split at sentence ends, ``;`` / ``:`` and ``verifier.clause_splitters``.
     """
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         config = _config(config)
-        cues = [str(cue) for cue in config.get("verifier", {}).get("negation_cues", ())]
+        cfg = config.get("verifier", {})
+        cues = [str(cue) for cue in cfg.get("negation_cues", ())]
         alternatives = [r"\b(?:" + "|".join(map(re.escape, cues)) + r")\b"] if cues else []
         self._negation_re = re.compile("|".join([*alternatives, r"n['’]t\b"]), re.IGNORECASE)
+        exempt = [str(p) for p in cfg.get("negation_exempt", ())]
+        self._exempt_re = re.compile("|".join(exempt), re.IGNORECASE) if exempt else None
+        splitters = [str(p) for p in cfg.get("clause_splitters", ())]
+        self._splitter_re = re.compile("|".join(splitters), re.IGNORECASE) if splitters else None
+        self._antonyms = [
+            (re.compile(r"\b(?:" + str(a) + r")\w*", re.IGNORECASE), re.compile(r"\b(?:" + str(b) + r")\w*", re.IGNORECASE))
+            for a, b in (cfg.get("antonym_pairs") or ())
+        ]
         self._stopwords = stopwords_from(config)
 
     def negated(self, text: str) -> bool:
+        if self._exempt_re is not None:
+            text = self._exempt_re.sub(" ", text)
         return len(self._negation_re.findall(text)) % 2 == 1
 
+    def swaps(self, clause: str, premise_clause: str) -> int:
+        """Antonym pairs used one way round in ``clause`` and the other in ``premise_clause``."""
+        count = 0
+        for a, b in self._antonyms:
+            for mine, theirs in ((a, b), (b, a)):
+                if (mine.search(clause) and not theirs.search(clause)
+                        and theirs.search(premise_clause) and not mine.search(premise_clause)):
+                    count += 1
+        return count
+
+    def clauses(self, text: str) -> list[str]:
+        out = split_clauses(text)
+        if self._splitter_re is not None:
+            out = [part for clause in out for part in self._splitter_re.split(clause) if part and part.strip()]
+        return out
+
     def flipped(self, premise: str, sentence: str) -> bool:
-        premise_clauses = [(set(content_tokens(c, self._stopwords)), self.negated(c)) for c in split_clauses(premise)]
+        premise_clauses = [(c, set(content_tokens(c, self._stopwords)), self.negated(c)) for c in self.clauses(premise)]
         if not premise_clauses:
             return False
-        for clause in split_clauses(sentence):
+        for clause in self.clauses(sentence):
             tokens = set(content_tokens(clause, self._stopwords))
             if not tokens:
                 continue
-            coverage = [overlap(tokens, premise_tokens) for premise_tokens, _ in premise_clauses]
+            coverage = [overlap(tokens, premise_tokens) for _, premise_tokens, _ in premise_clauses]
             best = max(coverage)
-            polarity = self.negated(clause)
-            if all(neg != polarity for (_, neg), cov in zip(premise_clauses, coverage) if cov == best):
+            negated = self.negated(clause)
+            if all(
+                (negated ^ (self.swaps(clause, text) % 2 == 1)) != premise_negated
+                for (text, _, premise_negated), cov in zip(premise_clauses, coverage)
+                if cov == best
+            ):
                 return True
         return False
 
@@ -272,7 +351,7 @@ class ClaimVerifier:
         self.allowlist = allowlist
         self.config = _config(config)
         cfg = self.config.get("verifier", {})
-        self.threshold = float(cfg.get("entailment_threshold", 0.6))
+        self.threshold = threshold_for(self.config)
         self.copy_check_enabled = bool(cfg.get("copy_check", True))
         self.reattribute_on_failure = bool(cfg.get("reattribute_on_failure", True))
         self.demote_on_fabricated = bool(cfg.get("demote_on_fabricated", True))

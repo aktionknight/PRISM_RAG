@@ -20,6 +20,8 @@ from slrag.synth.verifier import (
     TwoPassStreamer,
     copy_check,
     make_scorer,
+    premise_windows,
+    threshold_for,
     verify_all,
 )
 from tests.helpers import load_corpus
@@ -382,3 +384,86 @@ def test_cross_encoder_softmax_follows_configured_label_order(tmp_path, monkeypa
     assert scorer.score("p", "h") == pytest.approx(math.exp(2.0) / denom)
     assert scorer.contradiction("p", "h") == pytest.approx(1.0 / denom)
     assert scorer.score_batch([("p", "h"), ("p2", "h2")]) == pytest.approx([math.exp(2.0) / denom] * 2)
+
+
+# -- Audit N-1: antonym swaps, exempt cue phrases, finer clause alignment -----------------
+@pytest.mark.parametrize("text, citation", [
+    ("Rejected refunds are processed within 10 business days to the original payment method.", "Doc_31 §5"),
+    ("Venue B seats up to 60 people and excludes a breakout room.", "Doc_12 §2"),
+    ("Itemised receipts are optional for reimbursement claims.", "Doc_44 §5"),
+    ("Card statements alone are rejected, and itemised receipts are excluded from claims.", "Doc_44 §5"),
+])
+def test_antonym_swaps_are_retracted_despite_full_lexical_overlap(verifier, text, citation):
+    result = verifier.verify(_draft(text, citation))
+    assert not result.ok and "negation_mismatch" in result.reasons
+
+
+def test_refund_versus_forfeit_is_retracted():
+    chunk = scored_chunk("Doc_31#4#0", load_corpus()["Doc_31#4#0"].text)
+    verifier = ClaimVerifier(CitationAllowlist.from_chunks([chunk]), config=load_synth_config())
+    result = verifier.verify(_draft(
+        "Cancellations made within 14 days of the event get the 25% booking deposit refunded.", "Doc_31 §4"))
+    assert not result.ok and "negation_mismatch" in result.reasons
+
+
+@pytest.mark.parametrize("text, citation", [
+    ("Card statements alone are rejected.", "Doc_44 §5"),       # antonym of a negated premise: same meaning
+    ("Venue B seats up to 60 people and includes a breakout room.", "Doc_12 §2"),
+])
+def test_antonym_that_restates_the_premise_commits(verifier, text, citation):
+    result = verifier.verify(_draft(text, citation))
+    assert result.ok, result.reasons
+
+
+@pytest.mark.parametrize("premise, text", [
+    ("Venue A offers catering and also hosts breakout sessions.",
+     "Venue A not only offers catering but also hosts breakout sessions."),
+    ("Venue A holds up to 40 people.", "Venue A holds no more than 40 people."),
+])
+def test_exempt_cue_phrases_are_not_negations(premise, text):
+    verifier = ClaimVerifier(CitationAllowlist.from_chunks([scored_chunk("Doc_1#1#0", premise)]),
+                             config=load_synth_config())
+    result = verifier.verify(_draft(text, "Doc_1 §1"))
+    assert "negation_mismatch" not in result.reasons, result.reasons
+
+
+def test_comma_clause_carries_its_own_polarity():
+    premise = "Venue A includes a projector, and the fee covers parking."
+    verifier = ClaimVerifier(CitationAllowlist.from_chunks([scored_chunk("Doc_1#1#0", premise)]),
+                             config=load_synth_config())
+    result = verifier.verify(_draft("Venue A includes a projector, but the fee does not cover parking.", "Doc_1 §1"))
+    assert not result.ok and "negation_mismatch" in result.reasons
+
+
+def test_cross_encoder_scores_the_best_sentence_window(tmp_path, monkeypatch):
+    """A claim entailed by one sentence of a multi-sentence chunk must not be diluted by the rest."""
+    class FakeCrossEncoder:
+        def __init__(self, path, **kwargs):
+            self.calls = []
+
+        def predict(self, pairs, **kwargs):
+            self.calls.append([tuple(p) for p in pairs])
+            return [[0.0, 4.0, 0.0] if premise == "B is 2." else [4.0, 0.0, 0.0] for premise, _ in pairs]
+
+    fake = types.ModuleType("sentence_transformers")
+    fake.CrossEncoder = FakeCrossEncoder
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake)
+    cfg = _config(entailment_backend="cross_encoder",
+                  cross_encoder={"model_path": str(tmp_path), "labels": ["contradiction", "entailment", "neutral"],
+                                 "premise_window_sentences": 1, "entailment_threshold": 0.5})
+    scorer = make_scorer(cfg)
+    assert scorer.score_batch([("A is 1. B is 2. C is 3.", "B is 2."), ("A is 1.", "B is 2.")]) == pytest.approx(
+        [math.exp(4) / (math.exp(4) + 2), 1 / (math.exp(4) + 2)])
+    assert len(scorer._model.calls) == 1                        # one predict call for every window of every pair
+    assert premise_windows("A is 1. B is 2. C is 3.", 2) == [
+        "A is 1. B is 2. C is 3.", "A is 1.", "B is 2.", "C is 3.", "A is 1. B is 2.", "B is 2. C is 3."]
+    assert premise_windows("A is 1.", 0) == ["A is 1."]
+
+
+def test_threshold_is_per_backend():
+    assert threshold_for(_config(entailment_backend="lexical", entailment_threshold=0.6)) == 0.6
+    nli = _config(entailment_backend="cross_encoder", entailment_threshold=0.6,
+                  cross_encoder={"entailment_threshold": 0.5})
+    assert threshold_for(nli) == 0.5
+    assert threshold_for(_config(entailment_backend="cross_encoder", entailment_threshold=0.6,
+                                 cross_encoder={})) == 0.6

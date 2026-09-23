@@ -50,11 +50,29 @@ verifier:
   demote_on_fabricated: true          # A §4.4: a fabricated ID demotes its sentence (no re-attribution rescue)
   polarity_check: true                # entailing clause and sentence must agree on negation (lexical scorer is blind to it)
   negation_cues: [not, "no", never, none, nor, neither, cannot, without, nothing, nobody, nowhere]   # plus "n't"
+  negation_exempt:                    # cue phrases that are not negations (audit N-1)
+    - '\bnot only\b'
+    - '\b(?:no|not) (?:more|less|fewer|later|earlier|greater) than\b'
+  clause_splitters: [',\s+(?:and|but|while|whereas|except)\s+', '\s+but\s+']   # each side keeps its own polarity
+  antonym_pairs:                      # generic English stems (regex, matched as word prefixes); a swap flips polarity
+    - [accept, reject]
+    - [approv, reject]
+    - [approv, 'den(?:y|ied|ies|ial)']
+    - [includ, exclud]
+    - [allow, 'prohibit|forbid|forbidden']
+    - [permit, 'prohibit|forbid|forbidden']
+    - [refund, forfeit]
+    - ['requir|mandatory|compulsory|must', optional]
+    - [increas, decreas]
+    - [maximum, minimum]
+    - [before, after]
   regenerate_on_retract: false        # HC-5: regeneration would exceed the <=3 LLM calls/turn budget
   cross_encoder:
     model_path: models/nli-deberta-v3-small   # baked at build time; never lazily downloaded (G1)
-    labels: [contradiction, entailment, neutral]
+    labels: [contradiction, entailment, neutral]   # checked against the model by scripts/bake_nli_model.py
     max_length: 256
+    premise_window_sentences: 1       # also score each sentence of the chunk on its own; entailment = max
+    entailment_threshold: 0.5         # NLI P(entail); bench/calibrate_nli.py: raw scorer flat over 0.25-0.95, 45/45 at 0.5
 
 # ---------------------------------------------------------------------------
 # Coverage matrix -> uncertainty (synth/uncertainty.py) — S-10
