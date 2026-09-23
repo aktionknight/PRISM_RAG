@@ -94,6 +94,14 @@ uncertainty:
     full_coverage_caveat: ""          # brief prefers an honest caveat; empty keeps it silent
 
 # ---------------------------------------------------------------------------
+# Claim-level contradiction gate (synth/conflicts.py) — behind Component 3's S-9 gating
+# ---------------------------------------------------------------------------
+conflicts:
+  enabled: true
+  frame_overlap: 0.75                 # Jaccard of non-numeral content tokens for "the same statement"
+                                      # close scores (uncertainty.ambiguity_margin) -> clarification; else higher rank wins
+
+# ---------------------------------------------------------------------------
 # Delta engine (synth/delta.py) — S-4 turn classifier, constraint slots, impact analysis
 # ---------------------------------------------------------------------------
 delta:

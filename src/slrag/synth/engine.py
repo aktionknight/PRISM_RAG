@@ -33,6 +33,7 @@ from slrag.core.schemas import (
     TelemetryEvent,
 )
 from slrag.synth.claims import ClaimGraph
+from slrag.synth.conflicts import ContradictionGate, retracted
 from slrag.synth.config import load_facets, load_synth_config
 from slrag.synth.delta import DeltaEngine, merge_constraints
 from slrag.synth.generator import make_generator
@@ -135,6 +136,8 @@ class SynthesisEngine:
         self._intent_evidence: dict[str, list[RetrievedChunk]] = {}
         self._uncertainty = ""
         self._epoch = 0          # turns started on this session; stamps classifications (audit N-3)
+        self.conflicts = ContradictionGate(self.config)
+        self._turn_questions: list[str] = []
 
     # -- public API ------------------------------------------------------------
     def classify(
@@ -225,9 +228,13 @@ class SynthesisEngine:
             events.append(event)
             yield event
         telemetry.add_generation(self.generator.usage, verifier, streamer, _ms(started))
+        committed = []
+        async for event in self._gate_conflicts(streamer, evidence, telemetry, committed):
+            events.append(event)
+            yield event
 
         with self.graph.revise() as revision:
-            for result in streamer.committed_results():
+            for result in committed:
                 intent = self._intents.get(result.draft.intent_id or "")
                 facet = intent.facet if intent else result.draft.facet
                 revision.add(
@@ -307,11 +314,15 @@ class SynthesisEngine:
             events.append(event)
             yield event
         telemetry.add_generation(self.generator.usage, verifier, streamer, _ms(gen_started))
+        committed = []
+        async for event in self._gate_conflicts(streamer, evidence, telemetry, committed):
+            events.append(event)
+            yield event
 
         lineage, report = self.delta.apply(
             self.graph,
             plan,
-            streamer.committed_results(),
+            committed,
             session_constraints=merged,
             delta_queries_issued=len(queries),
             latency_ms=_ms(started),
@@ -426,6 +437,31 @@ class SynthesisEngine:
         return restyled, "llm"
 
     # -- helpers ---------------------------------------------------------------
+    async def _gate_conflicts(self, streamer: TwoPassStreamer, evidence: Mapping[str, Sequence[RetrievedChunk]],
+                              telemetry: _Telemetry, committed: list[VerificationResult]):
+        """Contradiction gate over this turn's committed sentences; yields RETRACTED events
+        for the sentences it removes and fills ``committed`` with the survivors."""
+        scores: dict[str, float] = {}
+        for rows in evidence.values():
+            for chunk in rows:
+                scores[chunk.chunk_id] = max(scores.get(chunk.chunk_id, 0.0), chunk.score)
+        kept, conflicts = self.conflicts.resolve(streamer.committed_results(), scores)
+        committed.extend(kept)
+        self._turn_questions = [c.question for c in conflicts if c.question]
+        if conflicts:
+            telemetry.add("conflicts", 0.0, {
+                "pairs": len(conflicts),
+                "retracted": [r.text for c in conflicts for r in c.dropped],
+                "kept": [c.kept.text for c in conflicts if c.kept is not None],
+                "clarifications": self._turn_questions,
+            })
+        for conflict in conflicts:
+            for result in conflict.dropped:
+                result = retracted(result)
+                yield StreamEvent(kind="retracted", seq=result.draft.seq, text=result.text,
+                                  citations=result.citations, facet=result.draft.facet,
+                                  intent_id=result.draft.intent_id, verification=result)
+
     def _verification(self, evidence: Mapping[str, Sequence[RetrievedChunk]]) -> tuple[ClaimVerifier, TwoPassStreamer]:
         """Allowlist = exactly the chunks in this turn's context (S-6 layer 1)."""
         chunks = [chunk for rows in evidence.values() for chunk in rows]
@@ -456,9 +492,8 @@ class SynthesisEngine:
             if self.graph.meta(claim.claim_id).intent_id
         }
         rows = self.coverage.build(intents, self._intent_evidence, active, claim_intents=claim_intents)
-        uncertainty = " ".join(
-            part for part in (self.coverage.uncertainty_text(rows), *self.coverage.clarifications(rows)) if part
-        )
+        questions = list(dict.fromkeys([*self.coverage.clarifications(rows), *self._turn_questions]))
+        uncertainty = " ".join(part for part in (self.coverage.uncertainty_text(rows), *questions) if part)
         self._uncertainty = uncertainty
         telemetry.add("coverage", _ms(started), self.coverage.to_telemetry(rows))
 
@@ -484,7 +519,7 @@ class SynthesisEngine:
         )
         # HC-3 alternate branch: ambiguous evidence asks instead of guessing. The frozen
         # AnswerOutput has no field for it, so it rides in `uncertainty` and is also exposed here.
-        extensions["clarification_questions"] = self.coverage.clarifications(rows)
+        extensions["clarification_questions"] = questions
         return SynthesisResult(
             turn_type=classification.turn_type,
             classification=classification,

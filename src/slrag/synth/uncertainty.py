@@ -133,27 +133,9 @@ class CoverageMatrix:
         return first, second
 
     def _options(self, first: RetrievedChunk, second: RetrievedChunk) -> tuple[str, str]:
-        """The phrase that tells the two readings apart ("14 days" / "7 days").
-
-        Common leading and trailing words of the two lead sentences are stripped and
-        one word of trailing context is kept so a numeral keeps its unit. Falls back
-        to the citation labels when the readings share no frame or the differing
-        span is longer than ``clarification_max_words``.
-        """
-        words_a, words_b = _lead_sentence(first.text).split(), _lead_sentence(second.text).split()
-        shortest = min(len(words_a), len(words_b))
-        start = 0
-        while start < shortest and words_a[start] == words_b[start]:
-            start += 1
-        tail = 0
-        while tail < shortest - start and words_a[-1 - tail] == words_b[-1 - tail]:
-            tail += 1
-        end_a, end_b = len(words_a) - tail, len(words_b) - tail
-        context = 1 if tail else 0
-        span = max(end_a, end_b) - start + context
-        if start >= end_a or start >= end_b or span > self._max_option_words:
-            return label_for_chunk(first), label_for_chunk(second)
-        return " ".join(words_a[start:end_a + context]), " ".join(words_b[start:end_b + context])
+        """The phrase that tells the two readings apart ("14 days" / "7 days")."""
+        return differing_options(first.text, second.text, self._max_option_words,
+                                 fallback=(label_for_chunk(first), label_for_chunk(second)))
 
     def _entities(self, texts: Iterable[str]) -> list[str]:
         """Anchor-entity matches of ``uncertainty.entity_patterns``, ordered and unique."""
@@ -192,6 +174,30 @@ def _ranked(chunks: Sequence[RetrievedChunk]) -> list[RetrievedChunk]:
         if chunk.chunk_id not in best or chunk.score > best[chunk.chunk_id].score:
             best[chunk.chunk_id] = chunk
     return sorted(best.values(), key=lambda chunk: -chunk.score)
+
+
+def differing_options(text_a: str, text_b: str, max_words: int, *, fallback: tuple[str, str]) -> tuple[str, str]:
+    """The phrase that tells two readings apart ("14 days" / "7 days").
+
+    Common leading and trailing words of the two lead sentences are stripped and
+    one word of trailing context is kept so a numeral keeps its unit. Returns
+    ``fallback`` (e.g. the citation labels) when the readings share no frame or the
+    differing span is longer than ``max_words``.
+    """
+    words_a, words_b = _lead_sentence(text_a).split(), _lead_sentence(text_b).split()
+    shortest = min(len(words_a), len(words_b))
+    start = 0
+    while start < shortest and words_a[start] == words_b[start]:
+        start += 1
+    tail = 0
+    while tail < shortest - start and words_a[-1 - tail] == words_b[-1 - tail]:
+        tail += 1
+    end_a, end_b = len(words_a) - tail, len(words_b) - tail
+    context = 1 if tail else 0
+    span = max(end_a, end_b) - start + context
+    if start >= end_a or start >= end_b or span > max_words:
+        return fallback
+    return " ".join(words_a[start:end_a + context]), " ".join(words_b[start:end_b + context])
 
 
 def _lead_sentence(text: str) -> str:
