@@ -40,12 +40,34 @@ def check(path: Path, labels: list[str]) -> None:
     print(f"ok: {path} labels {model_labels}")
 
 
+def bake_spacy(*, check_only: bool, package: str = "en_core_web_sm") -> None:
+    """Copy the spaCy pipeline to ``verifier.spacy.model_path`` so runtime loads it from disk."""
+    import spacy
+
+    path = resolve_path(load_synth_config()["verifier"].get("spacy", {}).get("model_path", f"models/{package}"))
+    if not check_only:
+        try:
+            nlp = spacy.load(package)
+        except OSError:
+            from spacy.cli import download
+
+            download(package)
+            nlp = spacy.load(package)
+        nlp.to_disk(path)
+    ents = [(e.text, e.label_) for e in spacy.load(str(path))("Marriott holds up to 40 people.").ents]
+    print(f"ok: {path} -> {ents}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo-id", default=DEFAULT_REPO_ID, help="Hugging Face model id")
     parser.add_argument("--revision", default=None, help="pin a model revision (commit hash) for reproducible builds")
     parser.add_argument("--check", action="store_true", help="only verify an existing bake")
+    parser.add_argument("--spacy", action="store_true",
+                        help="also bake the spaCy NER model for verifier.entity_backend: spacy (W-6)")
     args = parser.parse_args()
+    if args.spacy:
+        bake_spacy(check_only=args.check)
 
     cfg = load_synth_config().get("verifier", {}).get("cross_encoder", {})
     path = resolve_path(cfg.get("model_path", "models/nli-deberta-v3-small"))

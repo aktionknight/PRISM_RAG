@@ -19,6 +19,7 @@ from slrag.synth.verifier import (
     LexicalEntailmentScorer,
     TwoPassStreamer,
     copy_check,
+    make_entity_extractor,
     make_scorer,
     premise_windows,
     threshold_for,
@@ -353,8 +354,8 @@ def test_make_scorer_rejects_unknown_backend():
         make_scorer(_config(entailment_backend="magic"))
 
 
-def test_cross_encoder_missing_model_raises_without_importing_dependency():
-    assert "sentence_transformers" not in sys.modules
+def test_cross_encoder_missing_model_raises_without_importing_dependency(monkeypatch):
+    monkeypatch.delitem(sys.modules, "sentence_transformers", raising=False)   # another test may have loaded it
     cfg = _config(entailment_backend="cross_encoder",
                   cross_encoder={"model_path": "models/definitely-not-baked", "labels": ["contradiction",
                                  "entailment", "neutral"], "max_length": 256})
@@ -458,6 +459,33 @@ def test_cross_encoder_scores_the_best_sentence_window(tmp_path, monkeypatch):
     assert premise_windows("A is 1. B is 2. C is 3.", 2) == [
         "A is 1. B is 2. C is 3.", "A is 1.", "B is 2.", "C is 3.", "A is 1. B is 2.", "B is 2. C is 3."]
     assert premise_windows("A is 1.", 0) == ["A is 1."]
+
+
+def test_spacy_entities_extend_the_copy_check(tmp_path, monkeypatch):
+    """Audit W-6: NER adds names the regex skips (a lone sentence-initial word)."""
+    class Doc:
+        def __init__(self, text):
+            self.ents = [types.SimpleNamespace(text=w, label_="ORG") for w in text.split() if w == "Marriott"]
+
+    fake = types.ModuleType("spacy")
+    fake.load = lambda path, **kwargs: Doc
+    monkeypatch.setitem(sys.modules, "spacy", fake)
+    cfg = _config(entity_backend="spacy", spacy={"model_path": str(tmp_path), "labels": ["ORG"]})
+    entities = make_entity_extractor(cfg)
+    assert entities("Marriott holds up to 40 people.") == ["Marriott"]
+    assert copy_check("Marriott holds up to 40 people.", [VENUE_A]) == ()             # regex alone misses it
+    assert copy_check("Marriott holds up to 40 people.", [VENUE_A], entities) == ("Marriott",)
+    verifier = ClaimVerifier(CitationAllowlist.from_chunks([scored_chunk("Doc_12#2#0", VENUE_A)]), config=cfg)
+    result = verifier.verify(_draft("Marriott holds up to 40 people.", "Doc_12 §2"))
+    assert not result.ok and "Marriott" in result.missing_values
+
+
+def test_spacy_backend_needs_a_baked_model():
+    cfg = _config(entity_backend="spacy", spacy={"model_path": "models/definitely-not-baked"})
+    with pytest.raises(FileNotFoundError, match="never downloaded|bake_nli_model"):
+        make_entity_extractor(cfg)
+    with pytest.raises(ValueError):
+        make_entity_extractor(_config(entity_backend="magic"))
 
 
 def test_threshold_is_per_backend():

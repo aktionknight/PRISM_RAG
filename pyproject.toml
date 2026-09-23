@@ -17,6 +17,8 @@ dependencies = [
 # Component 4 NLI verifier backend (nli-deberta-v3-small). Optional: the
 # deterministic lexical scorer is the default so CI stays offline.
 nli = ["sentence-transformers>=2.7"]
+# Optional NER for the verifier copy check (verifier.entity_backend: spacy, audit W-6).
+ner = ["spacy>=3.7"]
 dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 
 [tool.setuptools.packages.find]

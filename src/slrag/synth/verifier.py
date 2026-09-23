@@ -24,7 +24,7 @@ import re
 import threading
 import time
 from collections import deque
-from typing import Any, AsyncIterable, AsyncIterator, Iterable, Protocol, Sequence
+from typing import Any, AsyncIterable, AsyncIterator, Callable, Iterable, Protocol, Sequence
 
 from slrag.core.citations import find_markers, label_for_chunk, normalize_label
 from slrag.core.schemas import RetrievedChunk
@@ -43,6 +43,7 @@ from slrag.synth.types import DraftClaim, StreamEvent, VerificationResult
 _WS_RE = re.compile(r"\s+")
 _SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([.,;:!?)])")
 _END = object()          # immutable end-of-stream sentinel for the draft iterator
+_POSSESSIVE_RE = re.compile(r"['’]s?$")
 
 
 def _config(config: dict[str, Any] | None) -> dict[str, Any]:
@@ -249,15 +250,61 @@ def make_scorer(config: dict[str, Any] | None = None) -> EntailmentScorer:
 # ---------------------------------------------------------------------------
 # Copy check + claim verification
 # ---------------------------------------------------------------------------
-def copy_check(sentence: str, premises: Sequence[str]) -> tuple[str, ...]:
-    """Hard values of ``sentence`` absent from ALL premises (numerals, proper nouns). Empty = pass."""
+EntityExtractor = Callable[[str], Sequence[str]]
+
+
+class SpacyEntityExtractor:
+    """Regex proper nouns plus spaCy NER spans (``verifier.entity_backend: spacy``, audit W-6).
+
+    The regex heuristic skips a lone sentence-initial word, so "Marriott holds up to
+    40 people." escaped the copy check; NER catches such names. The model is loaded
+    from ``verifier.spacy.model_path`` (baked at build time, never downloaded).
+    """
+
+    def __init__(self, config: dict[str, Any] | None = None) -> None:
+        cfg = _config(config).get("verifier", {}).get("spacy", {}) or {}
+        model_path = cfg.get("model_path")
+        path = resolve_path(model_path) if model_path else None
+        if path is None or not path.exists():
+            raise FileNotFoundError(
+                f"spaCy model not found at {path or '<unset>'} (verifier.spacy.model_path). Bake it with "
+                "scripts/bake_nli_model.py --spacy, or set verifier.entity_backend: regex."
+            )
+        import spacy  # lazy: optional dependency
+
+        self._nlp = spacy.load(str(path), disable=["parser", "lemmatizer"])
+        self._labels = frozenset(str(label) for label in cfg.get("labels", ()))
+        self._lock = threading.Lock()
+
+    def __call__(self, text: str) -> list[str]:
+        with self._lock:
+            doc = self._nlp(text)
+        found = list(extract_proper_nouns(text))
+        for ent in doc.ents:
+            name = _POSSESSIVE_RE.sub("", ent.text).strip()        # "Venue B's" names "Venue B"
+            if ent.label_ in self._labels and name and name not in found:
+                found.append(name)
+        return found
+
+
+def make_entity_extractor(config: dict[str, Any] | None = None) -> EntityExtractor:
+    backend = _config(config).get("verifier", {}).get("entity_backend", "regex")
+    if backend == "regex":
+        return extract_proper_nouns
+    if backend == "spacy":
+        return SpacyEntityExtractor(config)
+    raise ValueError(f"unknown verifier.entity_backend {backend!r} (expected 'regex' or 'spacy')")
+
+
+def copy_check(sentence: str, premises: Sequence[str], entities: EntityExtractor = extract_proper_nouns) -> tuple[str, ...]:
+    """Hard values of ``sentence`` absent from ALL premises (numerals, names). Empty = pass."""
     available = {numeral for premise in premises for numeral in extract_numerals(premise)}
     lowered = [premise.lower() for premise in premises]
     missing: dict[str, None] = {}
     for numeral in extract_numerals(sentence):
         if numeral not in available:
             missing[numeral] = None
-    for noun in extract_proper_nouns(sentence):
+    for noun in entities(sentence):
         pattern = re.compile(r"(?<!\w)" + r"\s+".join(map(re.escape, noun.lower().split())) + r"(?!\w)")
         if not any(pattern.search(premise) for premise in lowered):
             missing[noun] = None
@@ -347,6 +394,7 @@ class ClaimVerifier:
         *,
         config: dict[str, Any] | None = None,
         scorer: EntailmentScorer | None = None,
+        entities: EntityExtractor | None = None,
     ) -> None:
         self.allowlist = allowlist
         self.config = _config(config)
@@ -357,6 +405,7 @@ class ClaimVerifier:
         self.demote_on_fabricated = bool(cfg.get("demote_on_fabricated", True))
         self.polarity = PolarityCheck(self.config) if cfg.get("polarity_check", True) else None
         self.scorer = scorer if scorer is not None else make_scorer(self.config)
+        self.entities = entities if entities is not None else make_entity_extractor(self.config)
         self._lock = threading.Lock()
         self.fabricated_ids_stripped = 0
         self.verified = 0
@@ -386,7 +435,7 @@ class ClaimVerifier:
             elif not supporting:
                 reasons.append("negation_mismatch")
             if self.copy_check_enabled:
-                missing = copy_check(text, [c.text for c in cited])
+                missing = copy_check(text, [c.text for c in cited], self.entities)
                 if missing:
                     reasons.append("copy_check_failed:" + ",".join(missing))
 
@@ -457,7 +506,7 @@ class ClaimVerifier:
             for chunk, score in zip(candidates, scores)
             if score >= self.threshold
             and not self._flipped(chunk.text, sentence)
-            and not (self.copy_check_enabled and copy_check(sentence, [chunk.text]))
+            and not (self.copy_check_enabled and copy_check(sentence, [chunk.text], self.entities))
         ]
         return passing, max(scores)
 

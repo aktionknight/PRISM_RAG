@@ -58,7 +58,14 @@ from slrag.synth.types import (
     VersionLineage,
 )
 from slrag.synth.uncertainty import CoverageMatrix
-from slrag.synth.verifier import CitationAllowlist, ClaimVerifier, TwoPassStreamer, copy_check, make_scorer
+from slrag.synth.verifier import (
+    CitationAllowlist,
+    ClaimVerifier,
+    TwoPassStreamer,
+    copy_check,
+    make_entity_extractor,
+    make_scorer,
+)
 
 COMPONENT = "synthesis"
 
@@ -108,6 +115,7 @@ class SynthesisEngine:
         retrieve_fn: RetrieveFn | None = None,
         pool: EvidencePoolView | None = None,
         scorer: Any | None = None,
+        entities: Any | None = None,
     ) -> None:
         self.session_id = session_id
         self.config = config if config is not None else load_synth_config()
@@ -119,6 +127,7 @@ class SynthesisEngine:
         self.retrieve_fn = retrieve_fn
         self.pool = pool
         self.scorer = scorer if scorer is not None else make_scorer(self.config)
+        self.entities = entities if entities is not None else make_entity_extractor(self.config)
         presentation = self.config.get("presentation", {}) or {}
         self._restyle_reasons = frozenset(map(str, presentation.get("llm_restyle_reasons", ()) or ()))
         self.session_constraints: dict[str, str] = {}
@@ -406,7 +415,7 @@ class SynthesisEngine:
             if fabricated or not kept or not text:
                 return None, "fallback:citation_outside_prior"
             sources = [claim.text for claim in active if set(claim.citations) & set(kept)]
-            if copy_check(text, sources):
+            if copy_check(text, sources, self.entities):
                 return None, "fallback:copy_check_failed"
             restyled.append(
                 Claim(claim_id=f"r{len(restyled) + 1}", facet=draft.facet, text=text, citations=list(kept),
@@ -421,7 +430,8 @@ class SynthesisEngine:
         """Allowlist = exactly the chunks in this turn's context (S-6 layer 1)."""
         chunks = [chunk for rows in evidence.values() for chunk in rows]
         self.graph.register_evidence(chunks)
-        verifier = ClaimVerifier(CitationAllowlist.from_chunks(chunks), config=self.config, scorer=self.scorer)
+        verifier = ClaimVerifier(CitationAllowlist.from_chunks(chunks), config=self.config, scorer=self.scorer,
+                                 entities=self.entities)
         return verifier, TwoPassStreamer(verifier)
 
     def _finish(

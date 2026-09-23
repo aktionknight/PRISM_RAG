@@ -6,8 +6,8 @@ setup:                ## core + dev deps; CI and golden replay stay offline (lex
 	$(PYTHON) -m pip install -e ".[dev]"
 
 setup-nli: setup      ## Component 4 NLI verifier: deps + weights baked at build time (never at runtime)
-	$(PYTHON) -m pip install -e ".[nli]"
-	$(PYTHON) scripts/bake_nli_model.py
+	$(PYTHON) -m pip install -e ".[nli,ner]"
+	$(PYTHON) scripts/bake_nli_model.py --spacy
 
 test:
 	$(PYTHON) -m pytest -q

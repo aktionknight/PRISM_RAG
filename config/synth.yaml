@@ -67,6 +67,10 @@ verifier:
     - [maximum, minimum]
     - [before, after]
   regenerate_on_retract: false        # HC-5: regeneration would exceed the <=3 LLM calls/turn budget
+  entity_backend: regex               # regex | spacy (adds NER names the regex misses, e.g. sentence-initial; W-6)
+  spacy:
+    model_path: models/en_core_web_sm # baked by scripts/bake_nli_model.py --spacy; never downloaded at runtime
+    labels: [PERSON, ORG, GPE, LOC, FAC, NORP, PRODUCT, EVENT, WORK_OF_ART, LAW]
   cross_encoder:
     model_path: models/nli-deberta-v3-small   # baked at build time; never lazily downloaded (G1)
     labels: [contradiction, entailment, neutral]   # checked against the model by scripts/bake_nli_model.py

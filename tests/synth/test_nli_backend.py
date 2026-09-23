@@ -48,6 +48,20 @@ def test_calibration_pairs_are_all_decided_correctly(nli_config, scorer):
     assert report["overall"]["false_rejects"] == 0, report["errors"]
 
 
+def test_spacy_entities_keep_calibration_and_catch_new_names(nli_config, scorer):
+    spacy_model = resolve_path(_CFG["verifier"]["spacy"]["model_path"])
+    if not spacy_model.exists():
+        pytest.skip("spaCy model not baked (scripts/bake_nli_model.py --spacy)")
+    pytest.importorskip("spacy")
+    config = copy.deepcopy(nli_config)
+    config["verifier"]["entity_backend"] = "spacy"
+    report = verifier_decisions(config, scorer, load_jsonl("bench/data/nli_calibration.jsonl"))
+    assert report["overall"]["false_rejects"] == 0 and report["overall"]["false_accepts"] == 0, report["errors"]
+    from slrag.synth.verifier import make_entity_extractor
+
+    assert "Marriott" in make_entity_extractor(config)("Marriott holds up to 40 people.")
+
+
 def test_golden_replay_passes_g4_g5_under_the_cross_encoder():
     records = asyncio.run(replay_all(backend="cross_encoder"))
     judge, threshold = make_judge("cross_encoder")
