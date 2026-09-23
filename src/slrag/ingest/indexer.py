@@ -158,4 +158,13 @@ class HybridIndexer:
 
         indexer = cls()
         indexer.build_and_save(chunks)
+        
+        # ── Run Phase 0 Facet Discovery ──
+        from slrag.ingest.facet_discovery import run_facet_discovery
+        logger.info("Starting Phase 0 Facet Discovery...")
+        run_facet_discovery(
+            corpus_dir=corpus_dir,
+            index_dir=indexer.sparse_path.parent
+        )
+        
         logger.info("Ingest pipeline complete.")

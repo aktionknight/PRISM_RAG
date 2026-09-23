@@ -75,7 +75,15 @@ class Decomposer:
     def __init__(self, config_dir: str | Path = "config") -> None:
         self.config_dir = Path(config_dir)
         self.app_config = self._load_yaml(self.config_dir / "app.yaml")
-        self.facets_config = self._load_yaml(self.config_dir / "facets.yaml")
+        
+        # Prefer generated facets over manual config
+        index_facets_path = self.config_dir.parent / ".index" / "facets.yaml"
+        if index_facets_path.exists():
+            self.facets_config = self._load_yaml(index_facets_path)
+            logger.info("Decomposer: loaded generated facets from .index/facets.yaml")
+        else:
+            self.facets_config = self._load_yaml(self.config_dir / "facets.yaml")
+            logger.info("Decomposer: loaded fallback facets from config/facets.yaml")
 
         self.max_llm_calls: int = self.app_config.get("engine", {}).get(
             "max_llm_calls_per_turn", 3

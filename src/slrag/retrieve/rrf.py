@@ -38,13 +38,41 @@ def apply_rrf(
     """
     k = config.get("rrf", {}).get("k", 60)
 
-    # Look up facet-specific weights
-    facet_weights = config.get("facet_weights", {})
-    weights = facet_weights.get(
-        facet, facet_weights.get("default", {"bm25": 0.5, "dense": 0.5})
-    )
-    w_sparse = weights.get("bm25", 0.5)
-    w_dense = weights.get("dense", 0.5)
+    # ── Load dynamic weights from facets.yaml (Phase 0 output) ──
+    from pathlib import Path
+    import yaml
+
+    project_root = Path(__file__).resolve().parents[3]
+    index_facets = project_root / ".index" / "facets.yaml"
+    
+    w_sparse, w_dense = 0.5, 0.5
+    found_facet = False
+
+    if index_facets.exists():
+        try:
+            with open(index_facets, "r", encoding="utf-8") as f:
+                facets_data = yaml.safe_load(f)
+                
+            for f_data in facets_data.get("facets", []):
+                if f_data.get("facet_id") == facet:
+                    bias = f_data.get("retrieval_bias", "balanced")
+                    if bias == "sparse":
+                        w_sparse, w_dense = 0.8, 0.2
+                    elif bias == "dense":
+                        w_sparse, w_dense = 0.2, 0.8
+                    found_facet = True
+                    break
+        except Exception as e:
+            logger.warning(f"Failed to read dynamic facet weights: {e}")
+            
+    if not found_facet:
+        # Fallback to hardcoded retrieval.yaml config
+        facet_weights = config.get("facet_weights", {})
+        weights = facet_weights.get(
+            facet, facet_weights.get("default", {"bm25": 0.5, "dense": 0.5})
+        )
+        w_sparse = weights.get("bm25", 0.5)
+        w_dense = weights.get("dense", 0.5)
 
     # Build rank maps (1-indexed)
     sparse_ranks: dict[str, int] = {
