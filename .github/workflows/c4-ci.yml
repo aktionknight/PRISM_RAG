@@ -1,0 +1,63 @@
+# Component 4 CI (C_TEAM_COORDINATION §5): golden replay + G4/G5 gates on every PR.
+# `fabricated_id_count == 0` and `full_corpus_searches == 0` fail the build (roadmap 4.7 / D3 AM).
+name: c4-ci
+
+on:
+  push:
+    branches: [sivansh, main]
+  pull_request:
+
+jobs:
+  offline:
+    name: tests + G4/G5 gate (lexical, offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+      - name: golden replay -> G4/G5 gate
+        run: |
+          python -m bench.replay_c4 --out runs/c4_golden.jsonl
+          python -m bench.metrics --run runs/c4_golden.jsonl --corpus tests/fixtures/fixture_chunks.jsonl \
+            --gold bench/data/c4_gold.jsonl --gate --out runs/c4_gates.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: c4-gates-lexical
+          path: runs/
+
+  nli:
+    name: NLI verifier + G4 with the cross-encoder judge
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: install (CPU torch keeps the runner small)
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev,nli,ner]"
+      - uses: actions/cache@v4
+        with:
+          path: models
+          key: c4-models-nli-deberta-v3-small-en_core_web_sm-v1
+      - name: bake models at build time (never at runtime, G1)
+        run: python scripts/bake_nli_model.py --spacy
+      - run: SLRAG_NLI=1 python -m pytest -q tests/synth/test_nli_backend.py
+      - name: golden replay on the cross-encoder -> G4/G5 gate with an independent NLI judge
+        run: |
+          python -m bench.replay_c4 --backend cross_encoder --out runs/c4_golden_nli.jsonl
+          python -m bench.metrics --run runs/c4_golden_nli.jsonl --corpus tests/fixtures/fixture_chunks.jsonl \
+            --gold bench/data/c4_gold.jsonl --judge cross_encoder --gate --out runs/c4_gates_nli.json
+      - run: python -m bench.calibrate_nli --pairs bench/data/nli_calibration.jsonl > runs/nli_calibration.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: c4-gates-nli
+          path: runs/
