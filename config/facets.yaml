@@ -16,7 +16,20 @@ facets:
   pricing:
     display: "Pricing & Costs"
     description: "Per-head rates, package pricing, additional charges"
-    retrieval_bias: "sparse"     # numbers and currency matter
+    retrieval: "sparse"     # role names, org levels
+
+  procedure:
+    display: "Booking Procedure"
+    description: "Steps to book, required forms, timelines"
+    retrieval_bias: "sparse"
+
+  comparison:
+    display: "Venue Comparison"
+    description: "Side-by-side feature comparisons across venues"
+    retrieval_bias: "dense"
+
+# Default facet for intents that don't match any above
+default_facet: "general"_bias: "sparse"     # numbers and currency matter
 
   catering_options:
     display: "Catering & Food"
@@ -31,17 +44,4 @@ facets:
   eligibility:
     display: "Eligibility & Approval"
     description: "Who can book, approval chains, role requirements"
-    retrieval_bias: "sparse"     # role names, org levels
-
-  procedure:
-    display: "Booking Procedure"
-    description: "Steps to book, required forms, timelines"
-    retrieval_bias: "sparse"
-
-  comparison:
-    display: "Venue Comparison"
-    description: "Side-by-side feature comparisons across venues"
-    retrieval_bias: "dense"
-
-# Default facet for intents that don't match any above
-default_facet: "general"
+    retrieval_bias
