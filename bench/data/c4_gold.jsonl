@@ -1,0 +1,3 @@
+{"session_id": "sess_example1_multi_intent", "turn_id": 1, "uncovered_facets": ["catering_options"], "_why": "brief Example 1: catering accommodation for Venue A is not in the corpus"}
+{"session_id": "sess_example2_refinement", "turn_id": 1, "uncovered_facets": []}
+{"session_id": "sess_example2_refinement", "turn_id": 2, "uncovered_facets": []}
