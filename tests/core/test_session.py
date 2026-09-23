@@ -109,6 +109,44 @@ async def test_end_during_a_turn_defers_destruction(store):
     assert store.end("missing") is False
 
 
+async def test_a_turn_queued_behind_end_runs_on_a_fresh_session(store):
+    """Audit N-5: the waiting turn must not run on the session that was just retired."""
+    seen = []
+    first_entered = asyncio.Event()
+
+    async def first():
+        async with store.turn("a") as a:
+            first_entered.set()
+            await asyncio.sleep(0.01)
+            store.end("a")
+            seen.append(a)
+
+    async def second():
+        await first_entered.wait()
+        async with store.turn("a") as a:
+            seen.append(a)
+
+    await asyncio.gather(first(), second())
+    retired, fresh = seen
+    assert retired.destroyed and fresh is not retired and not fresh.destroyed
+    assert store.get("a") is fresh
+
+
+async def test_sweep_forever_reclaims_idle_sessions_without_traffic(clock):
+    store = SessionStore(Session, ttl_s=60, clock=clock)
+    a = store.get("a")
+    clock.now = 61
+    sweeper = asyncio.create_task(store.sweep_forever(interval_s=0.001))
+    for _ in range(50):
+        if a.destroyed:
+            break
+        await asyncio.sleep(0.001)
+    sweeper.cancel()
+    assert a.destroyed and "a" not in store
+    with pytest.raises(ValueError):
+        await store.sweep_forever(interval_s=0)
+
+
 def test_capacity_evicts_the_least_recently_used_idle_session(clock):
     store = SessionStore(Session, ttl_s=60, max_sessions=2, clock=clock)
     a, b = store.get("a"), store.get("b")

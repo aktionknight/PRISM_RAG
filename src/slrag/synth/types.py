@@ -126,6 +126,9 @@ class TurnClassification:
     turn_type: TurnType
     reason: str
     delta: ConstraintDelta = field(default_factory=ConstraintDelta)
+    # SynthesisEngine turn counter when classify() ran; handle_turn() re-classifies if
+    # another turn ran on the session in between (audit N-3). None = not stamped.
+    session_epoch: int | None = None
 
     @property
     def needs_upstream_retrieval(self) -> bool:

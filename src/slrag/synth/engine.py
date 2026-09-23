@@ -21,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, AsyncIterator, Iterable, Mapping, Sequence
 
 from slrag.core.schemas import (
@@ -125,6 +125,7 @@ class SynthesisEngine:
         self._intents: dict[str, SubIntent] = {}
         self._intent_evidence: dict[str, list[RetrievedChunk]] = {}
         self._uncertainty = ""
+        self._epoch = 0          # turns started on this session; stamps classifications (audit N-3)
 
     # -- public API ------------------------------------------------------------
     def classify(
@@ -139,15 +140,18 @@ class SynthesisEngine:
         harness skips Components 2-3 and hands the classification back in
         ``TurnInput.classification``, so a refinement turn never triggers a full
         corpus search upstream. Run classify and ``handle_turn`` inside the same
-        ``SessionStore.turn()`` so no other turn changes the session in between.
+        ``SessionStore.turn()`` so no other turn changes the session in between; if
+        one does anyway, ``handle_turn`` detects the stale classification and
+        re-classifies against the current session.
         """
-        return self.delta.classifier.classify(
+        classification = self.delta.classifier.classify(
             utterance,
             self.graph,
             session_constraints=self.session_constraints,
             controller_decisions=controller_decisions,
             sub_intents=sub_intents,
         )
+        return replace(classification, session_epoch=self._epoch)
 
     async def handle_turn(self, turn: TurnInput) -> SynthesisResult:
         result = None
@@ -161,15 +165,19 @@ class SynthesisEngine:
         """Yields two-pass StreamEvents as sentences are generated/verified, then the result."""
         started = time.perf_counter()
         precomputed = turn.classification is not None
-        classification = turn.classification or self.classify(
-            turn.utterance, turn.controller_decisions, turn.sub_intents
+        stale = precomputed and turn.classification.session_epoch not in (None, self._epoch)
+        classification = (
+            turn.classification
+            if precomputed and not stale
+            else self.classify(turn.utterance, turn.controller_decisions, turn.sub_intents)
         )
+        self._epoch += 1
         telemetry = _Telemetry(self.session_id, turn)
         telemetry.add(
             "classify",
             _ms(started),
             {"turn_type": classification.turn_type, "reason": classification.reason,
-             "delta": dict(classification.delta.slots), "precomputed": precomputed},
+             "delta": dict(classification.delta.slots), "precomputed": precomputed, "stale": stale},
         )
 
         if classification.turn_type == "PRESENTATION_ONLY":
@@ -318,9 +326,12 @@ class SynthesisEngine:
         started = time.perf_counter()
         request = parse_presentation_request(turn.utterance, self.config)
         restyled, restyle, usage = None, None, GenerationUsage()
-        if request.reason in self._restyle_reasons and callable(getattr(self.generator, "restyle", None)):
-            restyled, restyle = await self._restyle(turn.utterance)
-            usage = self.generator.usage
+        if request.reason in self._restyle_reasons:
+            if callable(getattr(self.generator, "restyle", None)):
+                restyled, restyle = await self._restyle(turn.utterance)
+                usage = self.generator.usage
+            else:
+                restyle = "fallback:no_llm_backend"
         answer, citations = render_presentation(
             self.graph, request, prior_citations=self.graph.citations(), config=self.config, claims=restyled
         )
@@ -346,6 +357,9 @@ class SynthesisEngine:
             lineage=None,
             telemetry=telemetry.summary(),
         )
+        # Audit N-4 / I-11: a translation or tone request answered with the unchanged
+        # prose render says so, instead of silently showing the original wording.
+        extensions["restyle_fallback"] = restyle.split(":", 1)[1] if restyle and restyle.startswith("fallback:") else None
         return SynthesisResult(
             turn_type=classification.turn_type,
             classification=classification,

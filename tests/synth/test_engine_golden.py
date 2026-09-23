@@ -240,9 +240,27 @@ async def test_pre_decomposition_routing_reproduces_every_golden_scenario(name):
     assert [r.output.model_dump() for r in routed] == [r.output.model_dump() for r in golden]
     assert upstream_passes == sum(t["expected"]["turn_type"] == "NEW_INTENT" for t in turns if "expected" in t)
     assert all(r.telemetry[0].payload["precomputed"] for r in routed)
+    assert not any(r.telemetry[0].payload["stale"] for r in routed)
     if name == "example2_refinement":
         # The refinement turn skipped upstream entirely: its only searches are the 2 targeted ones.
         assert [q.search_string for q in retriever.calls] == turns[1]["expected"]["sub_queries"]
+
+
+async def test_a_stale_precomputed_classification_is_redone():
+    """Audit N-3: another turn ran between classify() and handle_turn(); the stale route is not trusted."""
+    first, second = scenario_turns("example2_refinement")
+    retriever = FixtureRetriever(second["delta_evidence"])
+    engine = SynthesisEngine("sess_stale", retrieve_fn=retriever)
+    early = engine.classify(second["utterance"])                       # empty session: NEW_INTENT
+    assert early.turn_type == "NEW_INTENT" and early.session_epoch == 0
+    await engine.handle_turn(_turn_input(first))
+    result = await engine.handle_turn(
+        TurnInput(turn_id=2, utterance=second["utterance"], t_s_end=second["t_s_end"], classification=early)
+    )
+    assert result.turn_type == "CONSTRAINT_REFINEMENT"
+    classify = result.telemetry[0].payload
+    assert classify["precomputed"] is True and classify["stale"] is True
+    assert result.refinement.delta_queries_issued == 2
 
 
 class RestyleLLM:
@@ -286,6 +304,19 @@ async def test_translation_turn_uses_one_verified_llm_restyle():
     assert v2.output.citations == v1.output.citations                        # same sources, subset by construction
     assert v2.output.retrieval_events == [] and v2.extensions["suppression_reason"] == "translation"
     assert v2.output.answer_version == 1 and v2.extensions["claims"] == v1.extensions["claims"]  # graph untouched
+    assert v2.extensions["restyle_fallback"] is None
+    _assert_contract(v2)
+
+
+async def test_translation_without_an_llm_backend_reports_the_fallback():
+    engine, _, _, _ = await _run("example1_multi_intent")          # extractive backend: cannot restyle
+    decision = {"t_s": 0.9, "decision": "NO_RETRIEVAL", "reason": "translation", "confidence": 0.95}
+    turn = {"turn_id": 2, "utterance": "Can you translate that into Hindi?", "t_s_end": 0.9,
+            "retrieval_events": [], "controller_decisions": [decision]}
+    v2 = await engine.handle_turn(_turn_input(turn))
+    assert v2.extensions["suppression_reason"] == "translation"
+    assert v2.extensions["restyle_fallback"] == "no_llm_backend"
+    assert v2.output.answer == render_claims(engine.graph.active(), config=engine.config)
     _assert_contract(v2)
 
 
@@ -301,6 +332,7 @@ async def test_ungrounded_restyle_falls_back_to_the_deterministic_render(make, o
         RestyleLLM(make), "Say that again in a friendlier tone.", "tone_change")
 
     assert render["restyle"] == outcome and llm.calls == 1
+    assert v2.extensions["restyle_fallback"] == outcome.split(":", 1)[1]      # I-11: the UI can say so
     assert v2.output.answer == render_claims(engine.graph.active(), config=engine.config)
     assert "(translated)" not in v2.output.answer and "Doc_77" not in v2.output.answer
     _assert_contract(v2)
@@ -310,6 +342,7 @@ async def test_restructure_requests_never_call_the_llm():
     _, llm, _, v2, render = await _presentation_turn(
         RestyleLLM(_restated), "Can you repeat that in two bullets?", "presentation_restructure")
     assert llm.calls == 0 and v2.usage.llm_calls == 0 and render["restyle"] is None
+    assert v2.extensions["restyle_fallback"] is None
     assert len(v2.output.answer.splitlines()) == 2
 
 

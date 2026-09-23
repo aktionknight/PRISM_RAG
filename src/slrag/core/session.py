@@ -4,8 +4,8 @@ Session state lives only in this process's memory and is never written to
 disk. A session is destroyed (its ``destroy()`` called, then dropped) when it
 is ended explicitly, when it has been idle longer than ``ttl_s``, or when the
 store closes. Expiry is swept lazily on every access, so no background task is
-required; call ``sweep()`` from a timer if idle sessions must be reclaimed even
-while no traffic arrives.
+required; run ``sweep_forever()`` as a task if idle sessions must be reclaimed
+even while no traffic arrives.
 
 Turns within one session are serialised (``ClaimGraph`` allows a single open
 revision); different sessions run concurrently. A session with a turn running
@@ -91,17 +91,25 @@ class SessionStore(Generic[T]):
 
     @asynccontextmanager
     async def turn(self, session_id: str) -> AsyncIterator[T]:
-        """Exclusive access to one session for the duration of a turn."""
-        entry = self._entry(session_id)
-        entry.busy += 1
-        try:
-            async with entry.lock:
-                yield entry.value
-        finally:
-            entry.busy -= 1
-            entry.last_used = self._clock()
-            if entry.ended and entry.busy == 0:
-                entry.value.destroy()
+        """Exclusive access to one session for the duration of a turn.
+
+        A turn that was waiting on the lock when its session was ended runs on a
+        fresh session, never on the retired one (audit N-5).
+        """
+        while True:
+            entry = self._entry(session_id)
+            entry.busy += 1
+            try:
+                async with entry.lock:
+                    if entry.ended:
+                        continue
+                    yield entry.value
+                    return
+            finally:
+                entry.busy -= 1
+                entry.last_used = self._clock()
+                if entry.ended and entry.busy == 0:
+                    entry.value.destroy()
 
     def end(self, session_id: str) -> bool:
         """Session end. A running turn finishes first; the next access starts a fresh session."""
@@ -121,6 +129,21 @@ class SessionStore(Generic[T]):
         for sid in expired:
             self._retire(self._entries.pop(sid))
         return expired
+
+    async def sweep_forever(self, interval_s: float | None = None) -> None:
+        """Sweep on a timer (default every ``ttl_s / 4``) until cancelled, so idle sessions
+        are reclaimed even while no traffic arrives (audit I-10)::
+
+            sweeper = asyncio.create_task(store.sweep_forever())
+            ...
+            sweeper.cancel(); store.close()
+        """
+        interval = self._ttl_s / 4 if interval_s is None else float(interval_s)
+        if interval <= 0:
+            raise ValueError(f"interval_s must be positive, got {interval}")
+        while True:
+            await asyncio.sleep(interval)
+            self.sweep()
 
     def close(self) -> None:
         """Process shutdown: end every session."""
