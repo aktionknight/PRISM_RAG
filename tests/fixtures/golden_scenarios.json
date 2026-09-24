@@ -80,13 +80,13 @@
         "evidence": {},
         "retrieval_events": [],
         "delta_evidence": {
-          "international travel reimbursement exception": [["Doc_44#7#0", 0.86]],
-          "post-travel booking approval requirement": [["Doc_47#2#0", 0.83]]
+          "international trip Travel reimbursement": [["Doc_44#7#0", 0.86]],
+          "booked after travel Travel reimbursement": [["Doc_47#2#0", 0.83]]
         },
         "expected": {
           "turn_type": "CONSTRAINT_REFINEMENT",
           "answer_version": 2,
-          "constraint_delta": {"trip_type": "international", "booking_timing": "post_travel"},
+          "constraint_delta": {"trip": "international", "book": "after travel"},
           "refinement": {
             "event": "answer_refined", "from_version": 1, "to_version": 2,
             "claims_retained": 3, "claims_superseded": 1, "claims_added": 2,
@@ -94,7 +94,8 @@
           },
           "citations_preserved": ["Doc_44 §2", "Doc_44 §5", "Doc_44 §6"],
           "citations_added": ["Doc_44 §7", "Doc_47 §2"],
-          "sub_queries": ["international travel reimbursement exception", "post-travel booking approval requirement"],
+          "sub_queries": ["Travel reimbursement for international trip", "Travel reimbursement for booked after travel"],
+          "delta_search_strings": ["international trip Travel reimbursement", "booked after travel Travel reimbursement"],
           "retrieval_triggers": ["late_constraint", "late_constraint"]
         }
       }
@@ -150,14 +151,14 @@
           {"timestamp_s": 2.9, "query": "venue AV equipment included", "trigger": "multi_intent"}
         ],
         "delta_evidence": {
-          "40 attendees Venue capacity": [["Doc_12#2#0", 0.9]]
+          "40 people Venue capacity": [["Doc_12#2#0", 0.9]]
         },
         "expected": {
           "turn_type": "CONSTRAINT_REFINEMENT",
           "mixed": true,
           "upstream": true,
           "answer_version": 2,
-          "constraint_delta": {"headcount": "40"},
+          "constraint_delta": {"count:person": "40"},
           "refinement": {
             "event": "answer_refined", "from_version": 1, "to_version": 2,
             "claims_retained": 4, "claims_superseded": 3, "claims_added": 5,

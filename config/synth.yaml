@@ -10,6 +10,7 @@ text:
   # Stopwords are NLTK's English list; these are request / modal words it omits.
   extra_stopwords: [may, might, must, shall, could, would, per, also, please, need, want, like, upon, via]
   irregular_nouns: {people: person}   # English irregular plural WordNet files under noun.group
+  locative_prepositions: [in, at, near]   # proper noun after these = a place, when NER misses it
 
 # ---------------------------------------------------------------------------
 # Generator (synth/generator.py) — the single synthesis LLM call per turn (HC-5)
@@ -35,7 +36,8 @@ generator:
   extractive:                         # deterministic, offline backend (CI / golden replay)
     min_chunk_score: 0.5              # evidence below this rerank score is not used for claims
     max_claims_per_intent: 3
-    min_relevance: 0.15               # min content-token overlap of a sentence with query + facet keywords
+    min_relevance: 0.0                # min content-token overlap of a sentence with the query; 0 trusts retrieval
+                                      # (no facet keyword lists: relevance must not depend on hand-made vocabulary)
 
 # ---------------------------------------------------------------------------
 # Verifier (synth/verifier.py) — S-6 allowlist backstop + S-5 two-pass streaming
@@ -75,8 +77,8 @@ uncertainty:
   coverage_floor: 0.4                 # best rerank score below this and no claim -> uncovered
   ambiguity_margin: 0.05              # top-2 evidence docs within this margin and no claim -> ambiguous
   clarification_max_words: 6          # longer differing spans fall back to citation labels as options
-  entity_patterns:                    # anchor entities for entity x facet partial-coverage gaps
-    - '\b(?:Venue|Hotel|Hall|Centre|Center|Campus|Office) [A-Z0-9]\b'
+  entity_patterns:                    # anchor entities for entity x facet partial-coverage gaps: any
+    - '\b[A-Z][a-z]+ [A-Z0-9]\b'      # "Name X" designator ("Building 2", "Room 3", "Plan B"), no domain nouns
   templates:
     uncovered: "{facet_label} could not be verified from the retrieved corpus."
     entity_gap: "{facet_label} for {entity} could not be verified from the retrieved corpus."
@@ -98,7 +100,7 @@ delta:
   pool_resolution_min_score: 0.5      # pool chunk must score >= this to resolve a target with 0 retrievals
   additive_targets: true              # also target (active facet x new constraint) when no claim conflicts
   keep_unreplaced_session_scoped: true   # keep an affected claim whose delta query found nothing if its text never stated the old value
-  query_templates:                    # fallback when a slot value has no explicit query
+  query_templates:                    # targeted delta query from the user's own phrase + facet label
     query_nl: "{facet_label} for {value_phrase}"
     search_string: "{value_phrase} {facet_label}"
   refinement_cues:                    # extra lexical cues that a turn refines the prior answer
@@ -107,7 +109,6 @@ delta:
     - '\bturns out\b'
     - '\bi forgot to mention\b'
     - '\bit was\b'
-    - '\bthe trip was\b'
     - '\bmake it\b'
     - '\bchange (?:it|that) to\b'
   question_cues: ['\?', '\bwhat about\b', '\bhow about\b', '\b(?:what|which|how|where|when|why|who)\b',
@@ -115,40 +116,8 @@ delta:
   question_clause_splitters: ['[.;!?]\s+', ',\s+', '\s+[-–—]+\s+', '\s+and\s+(?=(?:what|which|how|is|are|do|does|can)\b)']
   follow_up_neutral: [change, changes, affect, affects, apply, applies, still, mean, means, anything, differ,
                       different, difference, update, now, then, happen, happens, else, work, works, rule, rules]
-  slots:
-    trip_type:
-      values:
-        international:
-          patterns: ['\binternational\b', '\boverseas\b', '\babroad\b']
-          value_phrase: international travel
-          query_nl: international travel reimbursement exception
-          search_string: international travel reimbursement exception
-        domestic:
-          patterns: ['\bdomestic\b', '\bwithin (?:the )?country\b']
-          value_phrase: domestic travel
-    booking_timing:
-      values:
-        post_travel:
-          patterns: ['\b(?:booked|booking|bought|purchased) after (?:the )?(?:travel|trip)\b',
-                     '\bafter travel\b', '\bpost[- ]travel\b', '\bretroactive(?:ly)?\b']
-          value_phrase: post-travel booking
-          facet: approval_requirements
-          query_nl: post-travel booking approval requirement
-          search_string: post-travel booking approval requirement
-        advance:
-          patterns: ['\bin advance\b', '\bbefore (?:the )?(?:travel|trip)\b', '\bbooked (?:early|ahead)\b']
-          value_phrase: advance booking
-    headcount:
-      numeric_patterns:
-        - '\b(?:for|of|to|with|be)\s+(\d{1,5})\s+(?:people|persons|attendees|guests|participants|delegates)\b'
-        - '\b(\d{1,5})[- ](?:person|people|attendee|seat)\b'
-      value_phrase: "{value} attendees"
-    city:
-      values:
-        pune: {patterns: ['\bpune\b'], value_phrase: Pune}
-        mumbai: {patterns: ['\bmumbai\b'], value_phrase: Mumbai}
-        bengaluru: {patterns: ['\bbengaluru\b', '\bbangalore\b'], value_phrase: Bengaluru}
-        delhi: {patterns: ['\bdelhi\b', '\bnew delhi\b'], value_phrase: Delhi}
+  # No slot list: constraints are read off a dependency parse (synth/constraints.py) —
+  # noun modifiers, number + unit, the user's role, place names — for any corpus.
 
 # ---------------------------------------------------------------------------
 # Presentation-only path (synth/renderer.py + turn classifier) — Example 3

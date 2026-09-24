@@ -34,6 +34,7 @@ from typing import Any, Sequence
 
 from bench import _ROOT  # noqa: F401  (puts src/ on sys.path)
 from slrag.synth.config import load_facets, load_synth_config
+from slrag.synth.constraints import values_of
 from slrag.synth.delta import ConstraintExtractor, merge_constraints
 from slrag.synth.engine import SynthesisEngine, TurnInput
 from slrag.synth.generator import LLMGenerator, make_generator
@@ -152,7 +153,7 @@ def stale_claims(claims: list[dict], current: dict[str, str], extractor: Constra
     stale = []
     for claim in claims:
         scoped = extractor.derive_preconditions(claim["text"], claim["facet"], {})
-        if any(slot in current and value != current[slot] for slot, value in scoped.items()):
+        if any(slot in current and current[slot] not in values_of(value) for slot, value in scoped.items()):
             stale.append(claim["text"])
     return stale
 

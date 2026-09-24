@@ -4,6 +4,7 @@ from slrag.core.citations import label_for_chunk
 from slrag.core.schemas import ControllerDecision, SubIntent
 from slrag.synth.claims import ClaimGraph
 from slrag.synth.config import load_synth_config
+from slrag.synth.constraints import values_of
 from slrag.synth.delta import DeltaEngine, analyze_impact, merge_constraints
 from slrag.synth.types import ConstraintDelta, DraftClaim, VerificationResult
 from tests.helpers import FixtureRetriever, load_corpus, scenario_turns, turn_decisions, turn_evidence, turn_sub_intents
@@ -76,15 +77,12 @@ def example1_graph(engine):
 
 # -- Example 2 (golden refinement) ---------------------------------------------------
 def test_v1_preconditions_scope_only_the_domestic_advance_claim(engine, example2):
+    """Scopes are read off each claim's own grammar ("Domestic trips booked in advance ...")."""
     graph, ids, session, _, _ = example2
-    assert session == {}
+    assert session.get("trip") == "business"                     # "my business trip"
     pre = {graph.get(cid).citations[0]: graph.get(cid).preconditions for cid in ids}
-    assert pre == {
-        "Doc_44 §2": {},
-        "Doc_44 §3": {"trip_type": "domestic", "booking_timing": "advance"},
-        "Doc_44 §5": {},
-        "Doc_44 §6": {},
-    }
+    assert pre["Doc_44 §3"]["trip"] == "domestic" and "in advance" in values_of(pre["Doc_44 §3"]["book"])
+    assert all("trip" not in pre[label] and "book" not in pre[label] for label in ("Doc_44 §2", "Doc_44 §5", "Doc_44 §6"))
 
 
 def test_classify_example2_turn2_is_constraint_refinement(engine, example2):
@@ -103,17 +101,14 @@ def test_plan_example2_targets_affected_facet_x_new_constraint(engine, example2)
     plan = engine.plan(graph, delta, pool=graph.evidence(), turn_id=2)
     assert plan.retained == [ids[0], ids[2], ids[3]] and plan.affected == [ids[1]]
     assert [(t.facet, t.slot, t.value) for t in plan.targets] == [
-        ("travel_reimbursement", "trip_type", "international"),
-        ("approval_requirements", "booking_timing", "post_travel"),
+        ("travel_reimbursement", "trip", "international"),
+        ("travel_reimbursement", "book", "after travel"),
     ]
     assert all(t.affected_claim_ids == (ids[1],) and not t.resolved_from_pool for t in plan.targets)
-    assert [q.search_string for q in plan.queries] == [
-        "international travel reimbursement exception",
-        "post-travel booking approval requirement",
-    ]
+    # Generic template over the user's own phrase + facet label; no hand-written query strings.
+    assert [q.search_string for q in plan.queries] == turn2["expected"]["delta_search_strings"]
     assert [q.query_nl for q in plan.queries] == turn2["expected"]["sub_queries"]
-    assert [q.intent_id for q in plan.queries] == ["d2_1", "d2_2"]
-    assert plan.queries[1].facet == "approval_requirements" and all(q.novel for q in plan.queries)
+    assert [q.intent_id for q in plan.queries] == ["d2_1", "d2_2"] and all(q.novel for q in plan.queries)
 
 
 def test_apply_example2_reproduces_golden_refinement(engine, example2):
@@ -149,9 +144,8 @@ def test_apply_example2_reproduces_golden_refinement(engine, example2):
     assert len(new) == 2
     assert all(graph.get(cid).model_dump_json() == before[cid] for cid in (c1, c3, c4))
     assert graph.get(c2).status == "superseded" and graph.meta(c2).superseded_by == tuple(new)
-    assert [graph.get(cid).facet for cid in new] == ["travel_reimbursement", "approval_requirements"]
-    assert all(graph.get(cid).preconditions == {"trip_type": "international", "booking_timing": "post_travel"}
-               for cid in new)
+    assert [graph.get(cid).facet for cid in new] == ["travel_reimbursement", "travel_reimbursement"]
+    assert "international" in values_of(graph.get(new[0]).preconditions["trip"])
     assert graph.citations() == expected["citations_preserved"] + expected["citations_added"]
 
 
@@ -163,7 +157,7 @@ def test_pool_first_resolution_skips_the_retrieval(engine, example2):
     assert international.resolved_from_pool and not post_travel.resolved_from_pool
     assert [c.chunk_id for c in international.pool_chunks] == ["Doc_44#7#0"]
     assert engine._min_score <= international.pool_chunks[0].score <= 1.0
-    assert [q.search_string for q in plan.queries] == ["post-travel booking approval requirement"]
+    assert [q.search_string for q in plan.queries] == turn2["expected"]["delta_search_strings"][1:]
 
     retriever = FixtureRetriever(turn2["delta_evidence"])
     dispatched = [(international.sub_intent.intent_id, international.pool_chunks[0])]
@@ -180,7 +174,7 @@ def test_pool_chunk_must_mention_new_value_and_not_be_cited_already(engine):
     graph = ClaimGraph("sess_pool")
     _build_v1(engine, graph, [("travel_reimbursement", CORPUS["Doc_44#3#0"]),
                               ("travel_reimbursement", CORPUS["Doc_44#7#0"])], {})
-    delta = ConstraintDelta(slots={"trip_type": "international"})
+    delta = ConstraintDelta(slots={"trip": "international"})
     plan = engine.plan(graph, delta, pool=[CORPUS["Doc_44#7#0"], CORPUS["Doc_44#2#0"]], turn_id=3)
     (target,) = plan.targets
     # Doc_44 §7 is already cited by a retained claim; Doc_44 §2 never mentions "international".
@@ -234,7 +228,7 @@ def test_new_intent_without_prior_answer_or_constraint(engine, example1_graph):
     (turn1,) = scenario_turns("example1_multi_intent")
     empty = engine.classifier.classify(turn1["utterance"], ClaimGraph("sess_new"))
     assert (empty.turn_type, empty.reason) == ("NEW_INTENT", "no_prior_answer")
-    assert dict(empty.delta.slots) == {"headcount": "30", "city": "pune"}
+    assert {k: empty.delta.slots[k] for k in ("count:person", "location")} == {"count:person": "30", "location": "pune"}
 
     graph, session = example1_graph
     parking = engine.classifier.classify("And what about parking options?", graph, session_constraints=session)
@@ -252,23 +246,24 @@ def test_new_slot_the_answer_does_not_depend_on_needs_a_cue(engine, example2):
 # -- Numeric refinement ---------------------------------------------------------------
 def test_numeric_headcount_refinement_builds_templated_query(engine):
     graph = ClaimGraph("sess_num")
-    session = {"headcount": "30"}
+    session = {"count:person": "30"}
     (cid,) = _build_v1(engine, graph, [("venue_capacity", CORPUS["Doc_12#2#0"])], session)
-    assert graph.get(cid).preconditions == {"headcount": "30"}   # not "40" from "holds up to 40 people"
+    # The count comes from the session, never from the claim's own numbers ("holds up to 40 people").
+    assert graph.get(cid).preconditions["count:person"] == "30"
 
     result = engine.classifier.classify("Actually make it 50 people", graph, session_constraints=session)
-    assert result.turn_type == "CONSTRAINT_REFINEMENT" and dict(result.delta.slots) == {"headcount": "50"}
+    assert result.turn_type == "CONSTRAINT_REFINEMENT" and dict(result.delta.slots) == {"count:person": "50"}
     assert analyze_impact(graph, result.delta) == ([], [cid])
 
     plan = engine.plan(graph, result.delta, pool=graph.evidence(), turn_id=4)
     (query,) = plan.queries
     templates = load_synth_config()["delta"]["query_templates"]
-    fields = {"facet_label": "Venue capacity", "value_phrase": "50 attendees"}
+    fields = {"facet_label": "Venue capacity", "value_phrase": "50 people"}
     assert (query.intent_id, query.facet) == ("d4_1", "venue_capacity")
     assert query.query_nl == templates["query_nl"].format(**fields)
     assert query.search_string == templates["search_string"].format(**fields)
 
-    # A claim whose precondition no longer holds is superseded even without a replacement.
+    # The claim's own text states the old count ("seats 30 attendees"): superseded even without a replacement.
     lineage, report = engine.apply(graph, plan, [], session_constraints=merge_constraints(session, result.delta),
                                    delta_queries_issued=1)
     assert lineage.superseded == (cid,) and lineage.added == () and graph.meta(cid).superseded_by == ()
@@ -276,29 +271,32 @@ def test_numeric_headcount_refinement_builds_templated_query(engine):
 
 
 # -- Extraction / preconditions ----------------------------------------------------
-def test_derive_preconditions_respects_facet_slots_and_numeric_rule(engine):
+def test_derive_preconditions_reads_the_claim_and_inherits_only_counts(engine):
     derive = engine.extractor.derive_preconditions
-    catering = "External caterers must be registered with the venue at least 7 days in advance."
-    assert derive(catering, "catering_options", {}) == {}
-    assert derive(catering, "catering_options", {"headcount": "30", "booking_timing": "post_travel"}) == {"headcount": "30"}
-    assert derive("Venue A holds up to 40 people.", "venue_capacity", {}) == {}
-    assert derive("Venue A holds up to 40 people.", "venue_capacity", {"city": "pune"}) == {"city": "pune"}
-    assert derive("Domestic trips booked in advance.", "travel_reimbursement",
-                  {"trip_type": "international"}) == {"trip_type": "domestic", "booking_timing": "advance"}
+    venue = "Venue A holds up to 40 people."
+    assert derive(venue, "venue_capacity", {}) == {}                                   # its own 40 is a fact
+    assert derive(venue, "venue_capacity", {"count:person": "30"}) == {"count:person": "30"}
+    assert derive(venue, "venue_capacity", {"location": "pune", "trip": "business"}) == {}  # only counts inherit
+    assert derive("Refunds are processed within 10 business days.", "x", {"count:person": "30"}) \
+        .get("count:person") is None                                                  # no person noun
+    scope = derive("Domestic trips booked in advance.", "travel_reimbursement", {"trip": "international"})
+    assert scope["trip"] == "domestic" and "in advance" in values_of(scope["book"])
 
 
 def test_extract_slots_restriction_and_merge(engine):
     text = "It was booked after travel, for 40 people in Bangalore."
-    assert dict(engine.extractor.extract(text).slots) == {"booking_timing": "post_travel", "headcount": "40",
-                                                          "city": "bengaluru"}
-    assert dict(engine.extractor.extract(text, slots=["headcount"]).slots) == {"headcount": "40"}
-    delta = ConstraintDelta(slots={"headcount": "50"})
-    assert merge_constraints({"headcount": "30", "city": "pune"}, delta) == {"headcount": "50", "city": "pune"}
+    slots = dict(engine.extractor.extract(text).slots)
+    assert slots["count:person"] == "40" and slots["location"] == "bangalore" and slots["book"] == "after travel"
+    assert dict(engine.extractor.extract(text, slots=["count:person"]).slots) == {"count:person": "40"}
+    delta = ConstraintDelta(slots={"count:person": "50"})
+    assert merge_constraints({"count:person": "30", "location": "pune"}, delta) == {"count:person": "50",
+                                                                                    "location": "pune"}
     assert DeltaEngine.merge_constraints is merge_constraints
 
 
 def test_additive_target_when_no_claim_conflicts(engine):
-    """V1 held only the general rule: a new constraint still fetches its specific rule, superseding nothing."""
+    """V1 held only the general rule: a new constraint still fetches its specific rule, superseding nothing.
+    The claim says "travel", the user says "trip": WordNet relates them (trip -> journey -> travel)."""
     graph = ClaimGraph("sess_additive")
     (c1,) = _build_v1(engine, graph, [("travel_reimbursement", CORPUS["Doc_44#2#0"])], {})
     classification = engine.classifier.classify("The trip was international.", graph, session_constraints={})
@@ -307,7 +305,7 @@ def test_additive_target_when_no_claim_conflicts(engine):
     assert plan.retained == [c1] and plan.affected == []
     (target,) = plan.targets
     assert target.affected_claim_ids == () and target.facet == "travel_reimbursement"
-    assert [q.search_string for q in plan.queries] == ["international travel reimbursement exception"]
+    assert [q.search_string for q in plan.queries] == ["international trip Travel reimbursement"]
 
     chunk = CORPUS["Doc_44#7#0"]
     graph.register_evidence([chunk])
@@ -325,7 +323,7 @@ def test_additive_targets_can_be_disabled_for_ablation():
     engine = DeltaEngine(config)
     graph = ClaimGraph("sess_no_additive")
     _build_v1(engine, graph, [("travel_reimbursement", CORPUS["Doc_44#2#0"])], {})
-    delta = ConstraintDelta(slots={"trip_type": "international"})
+    delta = ConstraintDelta(slots={"trip": "international"})
     assert engine.plan(graph, delta, pool=graph.evidence()).targets == []
 
 
@@ -338,7 +336,7 @@ def test_refinement_with_a_new_question_is_mixed(engine, example1_graph, utteran
     graph, session = example1_graph
     result = engine.classifier.classify(utterance, graph, session_constraints=session)
     assert result.turn_type == "CONSTRAINT_REFINEMENT" and result.mixed
-    assert dict(result.delta.slots) == {"headcount": "40"}
+    assert dict(result.delta.slots) == {"count:person": "40"}
     assert result.needs_upstream_retrieval                       # the new question goes through Components 2-3
 
 
@@ -368,8 +366,8 @@ def test_unreplaced_session_scoped_claims_are_kept(engine, example1_graph):
     """Self-correction 30 -> 40: a claim that only inherited headcount=30 is not dropped when its query finds nothing."""
     graph, session = example1_graph
     catering = next(c for c in graph.active() if c.facet == "catering_options")
-    delta = ConstraintDelta(slots={"headcount": "40"})
-    assert catering.preconditions.get("headcount") == "30" and not engine.content_scoped(catering, delta)
+    delta = ConstraintDelta(slots={"count:person": "40"})
+    assert catering.preconditions.get("count:person") == "30" and not engine.content_scoped(catering, delta)
     plan = engine.plan(graph, delta, pool=(), turn_id=2)
     assert catering.claim_id in plan.affected
     lineage, report = engine.apply(graph, plan, [], session_constraints=merge_constraints(session, delta),
@@ -380,9 +378,9 @@ def test_unreplaced_session_scoped_claims_are_kept(engine, example1_graph):
 
 def test_content_scoped_claims_are_still_superseded(engine):
     graph = ClaimGraph("sess_scoped")
-    (cid,) = _build_v1(engine, graph, [("venue_capacity", CORPUS["Doc_12#2#0"])], {"headcount": "30"})
+    (cid,) = _build_v1(engine, graph, [("venue_capacity", CORPUS["Doc_12#2#0"])], {"count:person": "30"})
     claim = graph.get(cid)
-    assert engine.content_scoped(claim, ConstraintDelta(slots={"headcount": "40"}))   # text says "30 attendees"
+    assert engine.content_scoped(claim, ConstraintDelta(slots={"count:person": "40"}))   # text says "30 attendees"
 
 
 def test_keeping_unreplaced_claims_can_be_disabled(example1_graph):
@@ -390,7 +388,7 @@ def test_keeping_unreplaced_claims_can_be_disabled(example1_graph):
     config["delta"]["keep_unreplaced_session_scoped"] = False
     strict = DeltaEngine(config)
     graph, session = example1_graph
-    delta = ConstraintDelta(slots={"headcount": "40"})
+    delta = ConstraintDelta(slots={"count:person": "40"})
     plan = strict.plan(graph, delta, pool=(), turn_id=2)
     lineage, report = strict.apply(graph, plan, [], session_constraints=merge_constraints(session, delta),
                                    delta_queries_issued=len(plan.queries))

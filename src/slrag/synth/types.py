@@ -114,8 +114,9 @@ class GenerationUsage:
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ConstraintDelta:
-    slots: Mapping[str, str] = field(default_factory=dict)   # {slot: value}, e.g. {"trip_type": "international"}
+    slots: Mapping[str, str] = field(default_factory=dict)   # {key: value}, e.g. {"trip": "international"}
     raw_text: str = ""
+    phrases: Mapping[str, str] = field(default_factory=dict)  # {key: surface text}, e.g. {"trip": "international trip"}
 
     def __bool__(self) -> bool:
         return bool(self.slots)

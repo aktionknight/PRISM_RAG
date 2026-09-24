@@ -527,8 +527,8 @@ class ExtractiveGenerator:
     def _select(
         self, intent: SubIntent, chunks: Sequence[RetrievedChunk], retained: set[str]
     ) -> list[tuple[RetrievedChunk, str]]:
-        keywords = " ".join(map(str, self.facets.get(intent.facet, {}).get("keywords", ()) or ()))
-        query = content_tokens(f"{intent.query_nl} {intent.search_string} {keywords}", self._stopwords)
+        label = facet_label(self.facets, intent.facet)
+        query = content_tokens(f"{intent.query_nl} {intent.search_string} {label}", self._stopwords)
         usable = sorted((c for c in chunks if c.score >= self.min_chunk_score), key=lambda c: -c.score)
         picked: list[tuple[RetrievedChunk, str]] = []
         seen = set(retained)

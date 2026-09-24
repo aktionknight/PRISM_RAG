@@ -8,8 +8,10 @@ Refinement is a ``ClaimGraph`` mutation, never string editing (Rule 3)::
 
 Deterministic and side-effect free: no LLM calls, no retrieval calls (HC-5) — the
 caller dispatches ``DeltaPlan.queries`` through Component 3. No module-level
-mutable state (HC-4). Slots, patterns, templates, cues and thresholds come from
-``config/synth.yaml`` ``delta:`` / ``presentation:`` and ``config/facets.yaml`` (HC-2).
+mutable state (HC-4). Constraints are read off a dependency parse
+(``synth/constraints.py``), never off a list of domain slots, so the engine works on any
+corpus; templates, cues and thresholds come from ``config/synth.yaml`` (HC-2), and
+``config/facets.yaml`` is only used for display labels (unknown facets are fine).
 
 Mixed turns (audit W-8): a refinement whose question clause asks about content
 the answer does not carry ("make it 40 people, and is AV equipment included?") is
@@ -31,6 +33,7 @@ from slrag.core.citations import label_for_chunk
 from slrag.core.schemas import Claim, ControllerDecision, RetrievedChunk, SubIntent
 from slrag.synth.claims import ClaimGraph
 from slrag.synth.config import facet_label, load_facets, load_synth_config
+from slrag.synth.constraints import ConstraintExtractor, values_of
 from slrag.synth.text import content_tokens, extract_numerals, extract_proper_nouns, overlap, stopwords_from, tokenize
 from slrag.synth.types import (
     ConstraintDelta,
@@ -53,8 +56,9 @@ def merge_constraints(session: Mapping[str, str], delta: ConstraintDelta) -> dic
 
 
 def _conflicting_slots(preconditions: Mapping[str, Any], delta: ConstraintDelta) -> list[str]:
-    """Delta slots the claim is scoped to with a *different* value (absent slot = general claim)."""
-    return [slot for slot, value in delta.slots.items() if slot in preconditions and str(preconditions[slot]) != value]
+    """Delta keys the claim is scoped to with *other* values (absent key = general claim)."""
+    return [slot for slot, value in delta.slots.items()
+            if slot in preconditions and value not in values_of(preconditions[slot])]
 
 
 def analyze_impact(graph: ClaimGraph, delta: ConstraintDelta) -> tuple[list[str], list[str]]:
@@ -64,86 +68,6 @@ def analyze_impact(graph: ClaimGraph, delta: ConstraintDelta) -> tuple[list[str]
     for claim in graph.active():
         (affected if _conflicting_slots(claim.preconditions, delta) else retained).append(claim.claim_id)
     return retained, affected
-
-
-class ConstraintExtractor:
-    """Regex slot filling over ``delta.slots`` (categorical ``values`` or ``numeric_patterns``)."""
-
-    def __init__(self, config: dict | None = None, facets: dict | None = None) -> None:
-        self.config = load_synth_config() if config is None else config
-        self.facets = load_facets() if facets is None else facets
-        self._slots: dict[str, dict[str, Any]] = dict(self.config.get("delta", {}).get("slots", {}) or {})
-        self._categorical: dict[str, tuple[tuple[str, tuple[re.Pattern[str], ...]], ...]] = {}
-        self._numeric: dict[str, tuple[re.Pattern[str], ...]] = {}
-        for slot, spec in self._slots.items():
-            if spec.get("values"):
-                self._categorical[slot] = tuple(
-                    (str(value), tuple(re.compile(p, re.IGNORECASE) for p in (vspec or {}).get("patterns", ())))
-                    for value, vspec in spec["values"].items()
-                )
-            elif spec.get("numeric_patterns"):
-                self._numeric[slot] = tuple(re.compile(p, re.IGNORECASE) for p in spec["numeric_patterns"])
-
-    # -- extraction --------------------------------------------------------------
-    def extract(self, text: str, slots: Iterable[str] | None = None) -> ConstraintDelta:
-        wanted = None if slots is None else set(slots)
-        found: dict[str, str] = {}
-        for slot in self._slots:
-            if wanted is not None and slot not in wanted:
-                continue
-            value = self._match_categorical(slot, text) if slot in self._categorical else self._match_numeric(slot, text)
-            if value is not None:
-                found[slot] = value
-        return ConstraintDelta(slots=found, raw_text=text)
-
-    def derive_preconditions(self, claim_text: str, facet: str, session_constraints: Mapping[str, str]) -> dict[str, str]:
-        """Claim scope over the facet's ``constraint_slots``: a categorical value in the claim's own
-        text wins, else the session constraint. Numeric slots come from the session only."""
-        out: dict[str, str] = {}
-        for slot in self.facets.get(facet, {}).get("constraint_slots") or ():
-            value = self._match_categorical(slot, claim_text) if slot in self._categorical else None
-            if value is None and session_constraints.get(slot) is not None:
-                value = str(session_constraints[slot])
-            if value is not None:
-                out[slot] = value
-        return out
-
-    # -- slot metadata (used by the delta engine) --------------------------------
-    def is_numeric(self, slot: str) -> bool:
-        return slot in self._numeric
-
-    def value_spec(self, slot: str, value: str) -> Mapping[str, Any]:
-        """Config for ``slot=value``: the categorical value's spec, or the numeric slot's spec."""
-        spec = self._slots.get(slot, {})
-        if slot in self._numeric:
-            return spec
-        return (spec.get("values") or {}).get(value) or {}
-
-    def value_phrase(self, slot: str, value: str) -> str:
-        phrase = self.value_spec(slot, value).get("value_phrase")
-        return str(phrase).format(value=value) if phrase else value
-
-    def mentions(self, slot: str, value: str, text: str) -> bool:
-        """Does ``text`` mention ``slot=value`` (a value pattern matches / the number appears)?"""
-        if slot in self._numeric:
-            return value in extract_numerals(text)
-        for candidate, patterns in self._categorical.get(slot, ()):
-            if candidate == value:
-                return any(p.search(text) for p in patterns)
-        return False
-
-    def _match_categorical(self, slot: str, text: str) -> str | None:
-        for value, patterns in self._categorical.get(slot, ()):
-            if any(p.search(text) for p in patterns):
-                return value
-        return None
-
-    def _match_numeric(self, slot: str, text: str) -> str | None:
-        for pattern in self._numeric.get(slot, ()):
-            match = pattern.search(text)
-            if match:
-                return match.group(1).replace(",", "")
-        return None
 
 
 class TurnClassifier:
@@ -183,16 +107,6 @@ class TurnClassifier:
         self._clause_re = re.compile("|".join(map(str, delta_cfg.get("question_clause_splitters", ()) or [r"(?!)"])),
                                      re.IGNORECASE)
         self._follow_up_neutral = frozenset(tokenize(" ".join(map(str, delta_cfg.get("follow_up_neutral", ()) or ()))))
-        self._slot_patterns = [
-            re.compile(p, re.IGNORECASE)
-            for spec in (delta_cfg.get("slots") or {}).values()
-            for p in [*(spec.get("numeric_patterns") or ()),
-                      *(q for v in (spec.get("values") or {}).values() for q in (v or {}).get("patterns", ()))]
-        ]
-        self._keywords = {
-            facet: frozenset(tokenize(" ".join(map(str, spec.get("keywords", ()) or ()))))
-            for facet, spec in self.facets.items()
-        }
 
     def classify(
         self,
@@ -204,8 +118,8 @@ class TurnClassifier:
         sub_intents: Sequence[SubIntent] = (),
     ) -> TurnClassification:
         session = {k: str(v) for k, v in (session_constraints or {}).items()}
-        extracted = self.extractor.extract(utterance)
         active = graph.active()
+        extracted = self._user_constraints(utterance, active, session)
         if not active:
             return TurnClassification("NEW_INTENT", "no_prior_answer", extracted)
 
@@ -214,16 +128,39 @@ class TurnClassifier:
         if reason is not None:
             return TurnClassification("PRESENTATION_ONLY", reason, ConstraintDelta(raw_text=utterance))
 
-        delta = ConstraintDelta(slots=changed, raw_text=utterance)
-        # A new slot the current answer does not depend on only counts as a refinement with a cue.
-        if changed and (self._depends_on(active, changed) or any(c.search(utterance) for c in self._cues)):
-            if self.asks_new_question(utterance, active, sub_intents):
+        # Only a constraint the answer depends on is a delta; a cue ("actually", "make it")
+        # makes any changed constraint one.
+        relevant = {slot: value for slot, value in changed.items() if self._depends_on(active, slot, session)}
+        if not relevant and changed and any(c.search(utterance) for c in self._cues):
+            relevant = dict(changed)
+        phrases = {slot: extracted.phrases.get(slot, "") for slot in (relevant or changed)}
+        delta = ConstraintDelta(slots=relevant or changed, raw_text=utterance, phrases=phrases)
+        if relevant:
+            if self.asks_new_question(utterance, active, sub_intents, delta):
                 return TurnClassification("CONSTRAINT_REFINEMENT", "constraint_delta_with_new_question", delta,
                                           mixed=True)
             return TurnClassification("CONSTRAINT_REFINEMENT", "constraint_delta", delta)
         return TurnClassification("NEW_INTENT", "new_intent", delta)
 
-    def asks_new_question(self, utterance: str, active: Sequence[Claim], sub_intents: Sequence[SubIntent] = ()) -> bool:
+    def _user_constraints(self, utterance: str, active: Sequence[Claim], session: Mapping[str, str]) -> ConstraintDelta:
+        """Parsed constraints minus two kinds of non-constraints: phrases made of presentation
+        vocabulary ("repeat that in two bullets") and counts that only point at a number the
+        answer already states ("the part about the 14 days")."""
+        parsed = self.extractor.extract(utterance)
+        claim_numerals = set(extract_numerals(" ".join(c.text for c in active)))
+        slots, phrases = {}, {}
+        for key, value in parsed.slots.items():
+            head = set(tokenize(key.split(":", 1)[-1]))
+            words = (head | set(tokenize(value))) - {t for t in tokenize(value) if t[0].isdigit()}
+            if (head and head <= self._neutral) or (words and words <= self._neutral):
+                continue
+            if self.extractor.is_numeric(key) and key not in session and value in claim_numerals:
+                continue
+            slots[key], phrases[key] = value, parsed.phrases.get(key, "")
+        return ConstraintDelta(slots=slots, raw_text=utterance, phrases=phrases)
+
+    def asks_new_question(self, utterance: str, active: Sequence[Claim], sub_intents: Sequence[SubIntent] = (),
+                          delta: ConstraintDelta | None = None) -> bool:
         """Does a refinement turn also ask about something the answer does not cover (W-8)?
 
         After decomposition: a novel sub-intent on a facet the answer lacks. Before it
@@ -241,7 +178,10 @@ class TurnClassifier:
         for clause in self._clause_re.split(utterance):
             if not clause or not self._question_re.search(clause):
                 continue
-            for pattern in (*self._slot_patterns, *self._cues):
+            for phrase in (delta.phrases.values() if delta is not None else ()):
+                if phrase:
+                    clause = re.sub(re.escape(phrase), " ", clause, flags=re.IGNORECASE)
+            for pattern in self._cues:
                 clause = pattern.sub(" ", clause)
             if any(tok not in known and not tok[0].isdigit() and len(tok) > 1 for tok in tokenize(clause)):
                 return True
@@ -254,9 +194,9 @@ class TurnClassifier:
         changed_slots: Mapping[str, str],
         sub_intents: Sequence[SubIntent] = (),
     ) -> list[str]:
-        """Content the prior answer does not already carry: numerals, new/changed slot values,
-        proper nouns absent from active claims, keywords of facets absent from the answer,
-        and novel sub-intents on such facets. Empty => the turn can be presentation-only."""
+        """Content the prior answer does not already carry: numerals, new/changed constraints,
+        proper nouns absent from active claims, and novel sub-intents on facets the answer
+        lacks. Empty => the turn can be presentation-only."""
         claim_text = " ".join(c.text for c in active)
         claim_lower = claim_text.lower()
         claim_numerals = set(extract_numerals(claim_text))
@@ -270,9 +210,6 @@ class TurnClassifier:
                 continue
             if not re.search(r"\b" + re.escape(noun.lower()) + r"\b", claim_lower):
                 anchors.append(noun)
-        answered = set().union(*(self._keywords.get(f, frozenset()) for f in active_facets))
-        unanswered = set().union(*(kw for f, kw in self._keywords.items() if f not in active_facets))
-        anchors += sorted((set(tokenize(utterance)) & unanswered) - answered)
         anchors += [s.intent_id for s in sub_intents if s.novel and s.facet not in active_facets]
         return anchors
 
@@ -295,12 +232,12 @@ class TurnClassifier:
                 return reason
         return self._default_reason
 
-    def _depends_on(self, active: Sequence[Claim], slots: Mapping[str, str]) -> bool:
-        relevant: set[str] = set()
-        for claim in active:
-            relevant.update(self.facets.get(claim.facet, {}).get("constraint_slots") or ())
-            relevant.update(claim.preconditions)
-        return any(slot in relevant for slot in slots)
+    def _depends_on(self, active: Sequence[Claim], slot: str, session: Mapping[str, str]) -> bool:
+        """The answer depends on ``slot`` if a session constraint, a claim's scope or a claim's
+        text already involves it (its noun / verb / unit class / a role / a place)."""
+        if slot in session or any(slot in claim.preconditions for claim in active):
+            return True
+        return any(self.extractor.mentions_key(slot, claim.text) for claim in active)
 
 
 class DeltaEngine:
@@ -337,25 +274,23 @@ class DeltaEngine:
             claim = claims[claim_id]
             for slot in _conflicting_slots(claim.preconditions, delta):
                 value = delta.slots[slot]
-                facet = self.extractor.value_spec(slot, value).get("facet") or claim.facet
-                ids = grouped.setdefault((str(facet), slot, value), [])
+                ids = grouped.setdefault((claim.facet, slot, value), [])
                 if claim_id not in ids:
                     ids.append(claim_id)
         if self._additive:
             # A new constraint can add rules without contradicting any claim (only the general
-            # rule was in V1): target (active facet x new constraint) for facets that declare
-            # the slot, superseding nothing. Dedupes onto conflict targets with the same key.
+            # rule was in V1): target (active facet x new constraint) for facets whose claims talk
+            # about what the constraint restricts, superseding nothing. Dedupes onto conflict targets.
             for slot, value in delta.slots.items():
                 for facet in dict.fromkeys(c.facet for c in claims.values()):
-                    if slot in (self.facets.get(facet, {}).get("constraint_slots") or ()):
-                        target_facet = self.extractor.value_spec(slot, value).get("facet") or facet
-                        grouped.setdefault((str(target_facet), slot, value), [])
+                    if any(self.extractor.mentions_key(slot, c.text) for c in claims.values() if c.facet == facet):
+                        grouped.setdefault((facet, slot, value), [])
 
         cited = {label for c in claims.values() for label in c.citations}
         candidates = list({c.chunk_id: c for c in pool if label_for_chunk(c) not in cited}.values())
         targets = []
         for n, ((facet, slot, value), ids) in enumerate(grouped.items(), start=1):
-            sub_intent = self._sub_intent(f"d{turn_id}_{n}", facet, slot, value)
+            sub_intent = self._sub_intent(f"d{turn_id}_{n}", facet, slot, value, delta)
             targets.append(
                 DeltaTarget(
                     facet=facet,
@@ -368,17 +303,16 @@ class DeltaEngine:
             )
         return DeltaPlan(delta=delta, retained=retained, affected=affected, targets=targets)
 
-    def _sub_intent(self, intent_id: str, facet: str, slot: str, value: str) -> SubIntent:
-        """Targeted delta query scoped to (affected facet x new constraint) — never a full re-run."""
-        spec = self.extractor.value_spec(slot, value)
-        fields = {"facet_label": facet_label(self.facets, facet), "value_phrase": self.extractor.value_phrase(slot, value)}
-        query_nl = spec.get("query_nl") if not self.extractor.is_numeric(slot) else None
-        search = spec.get("search_string") if not self.extractor.is_numeric(slot) else None
+    def _sub_intent(self, intent_id: str, facet: str, slot: str, value: str, delta: ConstraintDelta) -> SubIntent:
+        """Targeted delta query scoped to (affected facet x new constraint) — never a full re-run.
+        Worded from the user's own phrase ("international trip", "40 people") and the facet label."""
+        fields = {"facet_label": facet_label(self.facets, facet),
+                  "value_phrase": self.extractor.value_phrase(slot, value, delta)}
         return SubIntent(
             intent_id=intent_id,
             facet=facet,
-            query_nl=str(query_nl or self._templates["query_nl"].format(**fields)),
-            search_string=str(search or self._templates["search_string"].format(**fields)),
+            query_nl=self._templates["query_nl"].format(**fields),
+            search_string=self._templates["search_string"].format(**fields),
             novel=True,
         )
 
@@ -387,15 +321,11 @@ class DeltaEngine:
     ) -> tuple[RetrievedChunk, ...]:
         """Pool-first resolution (S-4 step 4): eligible chunks mention the new value and are not
         cited by any active claim. Relevance = fraction of the targeted query's content tokens
-        the chunk covers, where the target facet's vocabulary (label + keywords) counts as one
-        synonym class once the chunk hits any of it. Chunks >= ``pool_resolution_min_score``
-        resolve the target, score-desc, with ``score`` set to that relevance."""
+        the chunk covers, where the target facet's label counts as one synonym class once the
+        chunk hits any of it. Chunks >= ``pool_resolution_min_score`` resolve the target,
+        score-desc, with ``score`` set to that relevance."""
         query = set(content_tokens(f"{sub_intent.query_nl} {sub_intent.search_string}", self._stopwords))
-        spec = self.facets.get(sub_intent.facet, {})
-        vocab = set(
-            content_tokens(" ".join([facet_label(self.facets, sub_intent.facet), *map(str, spec.get("keywords", ()) or ())]),
-                           self._stopwords)
-        )
+        vocab = set(content_tokens(facet_label(self.facets, sub_intent.facet), self._stopwords))
         hits = []
         for chunk in candidates:
             if not self.extractor.mentions(slot, value, chunk.text):
@@ -476,10 +406,11 @@ class DeltaEngine:
         return lineage, report
 
     def content_scoped(self, claim: Claim, delta: ConstraintDelta) -> bool:
-        """Does the claim's own text state the old value of a slot the delta changes?"""
+        """Does the claim's own text state the old value of a key the delta changes?"""
         return any(
-            self.extractor.mentions(slot, str(claim.preconditions[slot]), claim.text)
+            self.extractor.mentions(slot, old, claim.text)
             for slot in _conflicting_slots(claim.preconditions, delta)
+            for old in values_of(claim.preconditions[slot])
         )
 
     @staticmethod

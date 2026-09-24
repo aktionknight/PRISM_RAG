@@ -1,0 +1,173 @@
+{
+  "_doc": "Held-out generalisation suite: a library / IT-services corpus (tests/fixtures/heldout/chunks.jsonl) that shares no vocabulary, facets or slots with the brief's three examples. Facets here are NOT in config/facets.yaml. Written before the corpus-independent refactor; code must pass it without any domain word being added to config.",
+
+  "h1_new_intent": {
+    "turns": [
+      {
+        "turn_id": 1,
+        "utterance": "How many books can I borrow and what happens if I return them late?",
+        "t_s_end": 1.2,
+        "sub_intents": [
+          {"intent_id": "h1", "facet": "loan_limits", "query_nl": "how many books can be borrowed", "search_string": "borrow books limit", "novel": true},
+          {"intent_id": "h2", "facet": "overdue_fines", "query_nl": "fines for returning books late", "search_string": "overdue books fine", "novel": true}
+        ],
+        "evidence": {"h1": [["Lib_03#1#0", 0.88], ["Lib_03#2#0", 0.80]], "h2": [["Lib_03#4#0", 0.85]]},
+        "retrieval_events": [
+          {"timestamp_s": 0.6, "query": "borrow books limit", "trigger": "provisional"},
+          {"timestamp_s": 1.1, "query": "overdue books fine", "trigger": "multi_intent"}
+        ],
+        "expected": {"turn_type": "NEW_INTENT", "citations_include": ["Lib_03 §1", "Lib_03 §4"], "uncertainty": ""}
+      }
+    ]
+  },
+
+  "h2_role_refinement": {
+    "turns": [
+      {
+        "turn_id": 1,
+        "utterance": "How many books can an undergraduate student borrow, and for how long?",
+        "t_s_end": 1.0,
+        "sub_intents": [
+          {"intent_id": "h1", "facet": "loan_limits", "query_nl": "loan limits for undergraduate students", "search_string": "undergraduate student borrow books loan period", "novel": true}
+        ],
+        "evidence": {"h1": [["Lib_03#1#0", 0.9]]},
+        "retrieval_events": [{"timestamp_s": 0.5, "query": "undergraduate student borrow books loan period", "trigger": "provisional"}],
+        "expected": {"turn_type": "NEW_INTENT", "citations_include": ["Lib_03 §1"]}
+      },
+      {
+        "turn_id": 2,
+        "utterance": "Actually I'm a staff member.",
+        "t_s_end": 2.0,
+        "sub_intents": [],
+        "evidence": {},
+        "retrieval_events": [],
+        "delta_evidence_by_value": {"staff member": [["Lib_03#2#0", 0.87]]},
+        "expected": {
+          "turn_type": "CONSTRAINT_REFINEMENT",
+          "delta_keys": ["role"],
+          "delta_queries": 1,
+          "full_corpus_searches": 0,
+          "citations_include": ["Lib_03 §2"],
+          "citations_exclude": ["Lib_03 §1"],
+          "answer_version": 2
+        }
+      }
+    ]
+  },
+
+  "h3_count_refinement_nothing_found": {
+    "turns": [
+      {
+        "turn_id": 1,
+        "utterance": "Can I book a group study room for 4 people?",
+        "t_s_end": 1.0,
+        "sub_intents": [
+          {"intent_id": "h1", "facet": "study_rooms", "query_nl": "group study room booking for 4 people", "search_string": "group study room booking", "novel": true}
+        ],
+        "evidence": {"h1": [["Lib_07#1#0", 0.86]]},
+        "retrieval_events": [{"timestamp_s": 0.5, "query": "group study room booking", "trigger": "provisional"}],
+        "expected": {"turn_type": "NEW_INTENT", "citations_include": ["Lib_07 §1"]}
+      },
+      {
+        "turn_id": 2,
+        "utterance": "Make it 8 people.",
+        "t_s_end": 2.0,
+        "sub_intents": [],
+        "evidence": {},
+        "retrieval_events": [],
+        "delta_evidence_by_value": {},
+        "expected": {
+          "turn_type": "CONSTRAINT_REFINEMENT",
+          "delta_keys": ["count:person"],
+          "delta_queries": 1,
+          "full_corpus_searches": 0,
+          "citations_include": ["Lib_07 §1"],
+          "claims_kept_verbatim_from_v1": true
+        }
+      }
+    ]
+  },
+
+  "h4_presentation": {
+    "session_prefix": "h1_new_intent",
+    "turns": [
+      {
+        "turn_id": 2,
+        "utterance": "Can you summarise that in two bullets?",
+        "t_s_end": 2.0,
+        "sub_intents": [],
+        "evidence": {},
+        "retrieval_events": [],
+        "expected": {"turn_type": "PRESENTATION_ONLY", "retrieval_events": 0, "citations_subset_of_prior": true, "bullet_count": 2}
+      }
+    ]
+  },
+
+  "h5_contradiction": {
+    "turns": [
+      {
+        "turn_id": 1,
+        "utterance": "How long do I have to submit a warranty claim?",
+        "t_s_end": 1.0,
+        "sub_intents": [
+          {"intent_id": "h1", "facet": "warranty_claims", "query_nl": "deadline for submitting a warranty claim", "search_string": "warranty claim submission deadline", "novel": true}
+        ],
+        "evidence": {"h1": [["IT_12#1#0", 0.81], ["IT_14#1#0", 0.80]]},
+        "retrieval_events": [{"timestamp_s": 0.5, "query": "warranty claim submission deadline", "trigger": "provisional"}],
+        "expected": {"turn_type": "NEW_INTENT", "uncertainty_contains": ["30 days", "14 days"], "citations_exclude": ["IT_12 §1", "IT_14 §1"]}
+      }
+    ]
+  },
+
+  "h6_modifier_refinement": {
+    "turns": [
+      {
+        "turn_id": 1,
+        "utterance": "What warranty does a new laptop have?",
+        "t_s_end": 1.0,
+        "sub_intents": [
+          {"intent_id": "h1", "facet": "warranty_coverage", "query_nl": "warranty coverage for new laptops", "search_string": "new laptop warranty coverage", "novel": true}
+        ],
+        "evidence": {"h1": [["IT_11#1#0", 0.9]]},
+        "retrieval_events": [{"timestamp_s": 0.5, "query": "new laptop warranty coverage", "trigger": "provisional"}],
+        "expected": {"turn_type": "NEW_INTENT", "citations_include": ["IT_11 §1"]}
+      },
+      {
+        "turn_id": 2,
+        "utterance": "Actually the laptop is refurbished.",
+        "t_s_end": 2.0,
+        "sub_intents": [],
+        "evidence": {},
+        "retrieval_events": [],
+        "delta_evidence_by_value": {"refurbished": [["IT_11#2#0", 0.88]]},
+        "expected": {
+          "turn_type": "CONSTRAINT_REFINEMENT",
+          "delta_keys": ["laptop"],
+          "delta_queries": 1,
+          "full_corpus_searches": 0,
+          "citations_include": ["IT_11 §2"],
+          "citations_exclude": ["IT_11 §1"],
+          "answer_version": 2
+        }
+      }
+    ]
+  },
+
+  "h7_mixed": {
+    "session_prefix": "h6_modifier_refinement",
+    "_note": "prefix runs both h6 turns; this turn changes nothing already said and asks a new question",
+    "turns": [
+      {
+        "turn_id": 3,
+        "utterance": "And how do I submit a warranty claim?",
+        "t_s_end": 3.0,
+        "sub_intents": [
+          {"intent_id": "h9", "facet": "warranty_claims", "query_nl": "how to submit a warranty claim", "search_string": "warranty claim submission", "novel": true}
+        ],
+        "evidence": {"h9": [["IT_12#1#0", 0.84]]},
+        "retrieval_events": [{"timestamp_s": 2.9, "query": "warranty claim submission", "trigger": "multi_intent"}],
+        "expected": {"turn_type": "NEW_INTENT", "citations_include": ["IT_12 §1", "IT_11 §2"]}
+      }
+    ]
+  }
+}

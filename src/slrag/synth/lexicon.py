@@ -165,6 +165,12 @@ class WordNet:
     def antonyms(self, word: str) -> frozenset[str]:
         return _antonyms(self._wn, word.lower())
 
+    def related(self, noun: str, other: str) -> bool:
+        """Same noun, a shared sense, or one within two hypernym steps of the other among
+        their two most common senses ("trip" -> journey -> "travel")."""
+        a, b = self.lemma(noun, "n"), self.lemma(other, "n")
+        return a == b or _related(self._wn, a, b) or _related(self._wn, b, a)
+
     def is_person(self, noun: str) -> bool:
         """Does the noun name people (WordNet supersense ``noun.person``)? "attendees", "staff member"."""
         base = self.lemma(noun, "n")
@@ -185,6 +191,19 @@ def _antonyms(wn: Any, word: str) -> frozenset[str]:
                         for satellite in antonym.synset().similar_tos():
                             out.update(l.name().lower() for l in satellite.lemmas())
     return frozenset(w for w in out if "_" not in w and w != word)
+
+
+@lru_cache(maxsize=16384)
+def _related(wn: Any, noun: str, broader: str) -> bool:
+    targets = set(wn.synsets(broader, wn.NOUN)[:2])
+    if not targets:
+        return False
+    frontier = set(wn.synsets(noun, wn.NOUN)[:2])
+    for _ in range(3):                                  # the senses themselves + 2 hypernym steps
+        if frontier & targets:
+            return True
+        frontier = {h for s in frontier for h in s.hypernyms()}
+    return False
 
 
 @lru_cache(maxsize=4096)

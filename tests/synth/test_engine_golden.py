@@ -116,7 +116,7 @@ async def test_example2_refinement_is_a_delta_not_a_restart():
     assert v2.output.citations == exp2["citations_preserved"] + exp2["citations_added"]
     assert v2.output.sub_queries == exp2["sub_queries"]
     assert [e["trigger"] for e in v2.output.retrieval_events] == exp2["retrieval_triggers"]
-    assert [q.search_string for q in retriever.calls] == exp2["sub_queries"]
+    assert [q.search_string for q in retriever.calls] == exp2["delta_search_strings"]
 
     lineage = v2.extensions["version_lineage"]
     assert (lineage["from"], lineage["to"]) == (1, 2)
@@ -143,13 +143,13 @@ async def test_self_correction_mixed_with_a_new_question():
     assert set(v2.output.citations) == set(expected["citations_include"])
     assert v2.output.uncertainty == expected["uncertainty"]
     assert v2.output.answer_version == expected["answer_version"]
-    # V1 catering claims only inherited headcount=30 and their delta query found nothing: kept verbatim.
+    # V1 catering claims only inherited the session count (30 people) and their delta query found nothing: kept verbatim.
     v1_catering = [c for c in v1.extensions["claims"] if c["facet"] == "catering_options"]
     assert v1_catering and all(c in v2.extensions["claims"] for c in v1_catering)
     # The new question was answered from its upstream evidence, in the same single generator call.
     assert any(c["facet"] == "logistics" and "AV equipment" in c["text"] for c in v2.extensions["claims"])
     assert "is AV equipment included at the venues" in v2.output.sub_queries
-    assert [q.search_string for q in retriever.calls] == ["40 attendees Venue capacity", "40 attendees Catering options"]
+    assert [q.search_string for q in retriever.calls] == ["40 people Venue capacity", "40 people Catering options"]
     assert v2.usage.llm_calls == 0                                   # extractive backend; <= 1 on the LLM path
     _assert_contract(v2)
 
@@ -268,7 +268,7 @@ async def test_pre_decomposition_routing_reproduces_every_golden_scenario(name):
     assert not any(r.telemetry[0].payload["stale"] for r in routed)
     if name == "example2_refinement":
         # The refinement turn skipped upstream entirely: its only searches are the 2 targeted ones.
-        assert [q.search_string for q in retriever.calls] == turns[1]["expected"]["sub_queries"]
+        assert [q.search_string for q in retriever.calls] == turns[1]["expected"]["delta_search_strings"]
 
 
 async def test_a_stale_precomputed_classification_is_redone():
