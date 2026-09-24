@@ -118,3 +118,41 @@ Whenever creating, updating, or reviewing a Pull Request:
 4. **Verify**:
    Confirm that the audit markdown exists in [markdowns/audits/](file:///d:/downloads/PRISM_RAG/markdowns/audits) before marking PR work complete.
 
+
+---
+
+## 3. Mandatory Generalisation: Never Tune to the Golden Examples
+
+> [!IMPORTANT]
+> **RULE FOR ALL AGENTS**:
+> Nothing in PRISM (code, config, prompts, lexicons, thresholds, facet lists, stubs used at runtime) may be fitted to the three worked examples in the markdowns (Example 1 venues/Pune, Example 2 travel reimbursement, Example 3 presentation). The system is evaluated on **new, unseen documents and queries**. Whenever there is a design choice, **choose the option that works with any document set as the knowledge base**, even when a tuned option scores better on the goldens.
+
+### Why This Rule Exists
+- The golden examples are regression tests, not tuning targets. Rules shaped around them (domain slot lists, example-worded queries, venue-specific patterns, keyword lists from one corpus skim) silently fail on a new corpus.
+- Component 4 once had such rules. A held-out corpus in a different domain failed every refinement scenario until they were replaced with corpus-independent mechanisms.
+
+### Execution Instructions for Agents
+
+1. **Prefer general mechanisms over domain lists**:
+   - general language resources: NLTK stopwords/negation, WordNet, spaCy parses and NER;
+   - models: NLI cross-encoder, embeddings;
+   - data derived from whatever corpus is loaded (e.g. facet discovery at ingest);
+   - generic templates built from the user's own words.
+   Hand-written lists are allowed only for closed-class English words (function words, prepositions, request verbs), never for topic vocabulary.
+
+2. **No domain vocabulary from the examples** in `config/`, `src/` logic or prompts:
+   - no "venue", "Pune", "reimbursement", "trip", "catering" and similar;
+   - no queries or patterns worded after an example;
+   - no thresholds tuned until only the goldens pass.
+   Examples may appear in docstrings and tests only.
+
+3. **Prove generalisation with held-out data**:
+   - Every behaviour change must pass the held-out suite (`tests/synth/test_heldout.py`, a corpus unrelated to the examples) as well as the goldens.
+   - Add held-out scenarios for new behaviours. Write their expectations before changing the code.
+   - Never add a held-out domain's words to config to make them pass. The vocabulary guard tests enforce this and must stay green.
+
+4. **When the golden output and generality disagree, generality wins**:
+   - Update the golden expectation, not the mechanism, as long as the behaviour is still correct.
+   - Record the trade-off in the PR context / audit.
+
+5. **Audit it**: the architecture audit (Rule 2) must state, for each changed component, whether anything is corpus- or example-specific, and how it was checked.
