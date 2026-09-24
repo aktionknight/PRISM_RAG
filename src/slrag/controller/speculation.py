@@ -39,10 +39,16 @@ def process_speculation(chunk_text: str, current_drift: float, session: Controll
             # CANCEL
             # Demote retrieved chunks to EvidencePool
             for chunk_data in branch.get("retrieved_chunks", []):
-                session.evidence_pool.demote_to_pool(
-                    chunk_data["chunk_id"], 
-                    chunk_data
-                )
+                if hasattr(session, 'session') and session.session is not None:
+                    from slrag.core.schemas import EvidencePoolEntry
+                    entry = EvidencePoolEntry(**chunk_data)
+                    entry.speculative = True
+                    session.session.add_evidence(entry)
+                else:
+                    session.evidence_pool.demote_to_pool(
+                        chunk_data["chunk_id"], 
+                        chunk_data
+                    )
             # Remove branch
             del session.active_speculations[branch_id]
         else:

@@ -171,9 +171,15 @@ def build_answer_output(
     uncertainty: str,
     sub_queries: Sequence[str],
     retrieval_events: Sequence[Mapping[str, Any]],
+    retrieval_required: bool = True,
+    suppression_reason: str | None = None,
+    controller_decisions: Sequence[ControllerDecision] = (),
+    graph: ClaimGraph | None = None,
+    lineage: VersionLineage | None = None,
+    telemetry: Mapping[str, Any] | None = None,
     config: dict | None = None,
 ) -> AnswerOutput:
-    """The frozen contract object. Each retrieval event must be exactly
+    """The frozen contract object, now widened with v1.1 fields. Each retrieval event must be exactly
     ``{timestamp_s, query, trigger}`` with ``trigger`` in the §6 enum; raises ValueError otherwise."""
     cfg = (config if config is not None else load_synth_config()).get("renderer", {})
     triggers = tuple(cfg.get("triggers", _FALLBACK_TRIGGERS))
@@ -187,6 +193,12 @@ def build_answer_output(
         session_id=session_id,
         turn_id=turn_id,
         answer_version=answer_version,
+        retrieval_required=bool(retrieval_required),
+        suppression_reason=suppression_reason,
+        controller_decisions=list(controller_decisions),
+        claims=graph.to_output() if graph else [],
+        version_lineage=lineage,
+        telemetry=telemetry,
     )
 
 

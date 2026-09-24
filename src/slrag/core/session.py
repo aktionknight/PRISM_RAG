@@ -264,6 +264,7 @@ class SessionState:
 
     def __post_init__(self) -> None:
         self.controller.session_id = self.session_id
+        self.controller.session = self
 
     @property
     def is_expired(self) -> bool:

@@ -56,10 +56,13 @@ def apply_rrf(
             for f_data in facets_data.get("facets", []):
                 if f_data.get("facet_id") == facet:
                     bias = f_data.get("retrieval_bias", "balanced")
+                    bias_config = config.get("rrf", {}).get("bias_weights", {})
                     if bias == "sparse":
-                        w_sparse, w_dense = 0.8, 0.2
+                        sparse_cfg = bias_config.get("sparse", {"bm25": 0.8, "dense": 0.2})
+                        w_sparse, w_dense = sparse_cfg.get("bm25", 0.8), sparse_cfg.get("dense", 0.2)
                     elif bias == "dense":
-                        w_sparse, w_dense = 0.2, 0.8
+                        dense_cfg = bias_config.get("dense", {"bm25": 0.2, "dense": 0.8})
+                        w_sparse, w_dense = dense_cfg.get("bm25", 0.2), dense_cfg.get("dense", 0.8)
                     found_facet = True
                     break
         except Exception as e:

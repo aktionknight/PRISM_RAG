@@ -374,6 +374,12 @@ class SynthesisEngine:
             uncertainty=self._uncertainty,
             sub_queries=[],
             retrieval_events=[],
+            retrieval_required=False,
+            suppression_reason=request.reason,
+            controller_decisions=turn.controller_decisions,
+            graph=self.graph,
+            lineage=None,
+            telemetry=telemetry.summary(),
             config=self.config,
         )
         extensions = build_extensions(

@@ -101,11 +101,13 @@ def assemble_context(
     # ── Phase 1: Guaranteed quota — 2 chunks per intent ──
     remainder_candidates: list[RetrievedChunk] = []
 
+    chunk_to_intents = {}
     for intent_id, chunks in candidates_by_intent.items():
         facet_coverage[intent_id] = 0
         added = 0
 
         for chunk in chunks:
+            chunk_to_intents.setdefault(chunk.chunk_id, []).append(intent_id)
             if added < guaranteed:
                 tokens = _approx_token_count(chunk.text)
                 if total_tokens + tokens <= budget:
@@ -141,6 +143,9 @@ def assemble_context(
 
         selected_chunks.append(chunk)
         total_tokens += tokens
+        for intent_id in chunk_to_intents.get(chunk.chunk_id, []):
+            if intent_id in facet_coverage:
+                facet_coverage[intent_id] += 1
 
     logger.info(
         f"Context assembled: {len(selected_chunks)} chunks, "

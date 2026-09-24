@@ -2,6 +2,13 @@
 
 rrf:
   k: 60                          # RRF constant
+  bias_weights:                  # weights for 'sparse' and 'dense' bias flags
+    sparse:
+      bm25: 0.8
+      dense: 0.2
+    dense:
+      bm25: 0.2
+      dense: 0.8
 
 top_k:
   sparse: 50                     # BM25 top-k per sub-query
@@ -13,30 +20,6 @@ top_k:
 # Policy/terms/eligibility → boost sparse (exact-match language)
 # Descriptive/comparison/logistics → boost dense (paraphrase-heavy)
 facet_weights:
-  venue_capacity:
-    bm25: 0.4
-    dense: 0.6
-  cancellation_terms:
-    bm25: 0.7
-    dense: 0.3
-  pricing:
-    bm25: 0.7
-    dense: 0.3
-  catering_options:
-    bm25: 0.4
-    dense: 0.6
-  logistics:
-    bm25: 0.3
-    dense: 0.7
-  eligibility:
-    bm25: 0.7
-    dense: 0.3
-  procedure:
-    bm25: 0.6
-    dense: 0.4
-  comparison:
-    bm25: 0.3
-    dense: 0.7
   default:
     bm25: 0.5
     dense: 0.5

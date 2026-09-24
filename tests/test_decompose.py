@@ -33,18 +33,20 @@ async def test_decomposer_syntactic_split(mock_decomposer):
 @pytest.mark.asyncio
 async def test_decomposer_call_llm(mock_decomposer):
     with patch("slrag.decompose.decomposer.aiohttp.ClientSession") as mock_session:
+        mock_session_inst = MagicMock()
+        mock_session.return_value = mock_session_inst
+        mock_session_inst.__aenter__.return_value = mock_session_inst
+        
         mock_response = AsyncMock()
         mock_response.status = 200
         mock_response.json.return_value = {
-            "choices": [{"message": {"content": '{"sub_intents": [{"query_nl": "test", "facet": "general", "novel": True, "search_string": "test"}]}'}}]
+            "choices": [{"message": {"content": '{"sub_intents": [{"query_nl": "test", "facet": "general", "novel": true, "search_string": "test"}]}'}}]
         }
         
-        mock_post_ctx = AsyncMock()
+        mock_post_ctx = MagicMock()
         mock_post_ctx.__aenter__.return_value = mock_response
         
-        mock_session_ctx = AsyncMock()
-        mock_session_ctx.post.return_value = mock_post_ctx
-        mock_session.return_value.__aenter__.return_value = mock_session_ctx
+        mock_session_inst.post.return_value = mock_post_ctx
         
         response = await mock_decomposer._call_llm("test prompt")
         assert response == {"sub_intents": [{"query_nl": "test", "facet": "general", "novel": True, "search_string": "test"}]}
