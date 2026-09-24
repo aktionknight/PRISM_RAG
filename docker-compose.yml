@@ -1,0 +1,64 @@
+# Docker Compose — profiles: core (default) | obs (Grafana + Prometheus + Tempo)
+#
+# Usage:
+#   docker compose up                          # core engine + UI only
+#   docker compose --profile obs up            # + Grafana dashboard
+#   docker compose --profile obs --profile ui up
+
+services:
+  # ── Core SLRAG Engine ──
+  engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"   # FastAPI + WebSocket + Frontend
+    volumes:
+      - ./corpus:/app/corpus:ro
+      - ./config:/app/config:ro
+      - ./runs:/app/runs
+      - ./.index:/app/.index
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: >
+      uvicorn slrag.api.app:create_app --factory --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # ── Observability Stack (opt-in via --profile obs) ──
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    profiles: ["obs"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=24h'
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    profiles: ["obs"]
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=slrag
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus_data:
+  grafana_data:

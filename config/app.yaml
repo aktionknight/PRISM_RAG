@@ -2,9 +2,9 @@
 # Walking-skeleton feature flags (C_TEAM_COORDINATION §3/§5): if a module is not ready
 # at an integration checkpoint the skeleton keeps running on its stub.
 modules:
-  use_stub_controller: true      # Diya    — Component 1 (real cascade merged; harness not yet wired)
-  use_stub_decomposer: true      # Aakrit  — Component 2
-  use_stub_retriever: true       # Aakrit  — Component 3
+  use_stub_controller: false     # Diya    — Component 1 (real cascade merged; harness not yet wired)
+  use_stub_decomposer: false     # Aakrit  — Component 2
+  use_stub_retriever: false      # Aakrit  — Component 3
   use_stub_synthesizer: false    # Sivansh — Component 4 (real SynthesisEngine)
 
 # Session store (core/session.py, HC-4): in-process memory only; a session is

@@ -1,0 +1,11 @@
+# Prometheus configuration for SLRAG observability stack
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: 'slrag-engine'
+    static_configs:
+      - targets: ['engine:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 5s

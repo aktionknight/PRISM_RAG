@@ -94,9 +94,28 @@ def cmd_listen(args: argparse.Namespace) -> None:
     logger.info("Listen mode not yet implemented (Day 3)")
 
 
-def cmd_score(args: argparse.Namespace) -> None:
-    """Score a run against gold labels."""
-    logger.info("Scoring not yet implemented (Day 2)")
+def cmd_serve(args: argparse.Namespace) -> None:
+    """Start the FastAPI server with WebSocket + UI."""
+    import uvicorn
+    from slrag.api.app import create_app
+
+    host = args.host
+    port = args.port
+    reload = args.reload
+
+    logger.info(f"Starting SLRAG server on {host}:{port}")
+    logger.info(f"Frontend UI: http://{host}:{port}/")
+    logger.info(f"WebSocket:   ws://{host}:{port}/ws/session")
+    logger.info(f"Metrics:     http://{host}:{port}/metrics")
+
+    uvicorn.run(
+        "slrag.api.app:create_app",
+        factory=True,
+        host=host,
+        port=port,
+        reload=reload,
+        log_level="info",
+    )
 
 
 def main() -> None:
@@ -119,6 +138,13 @@ def main() -> None:
     p_replay.add_argument("--stream", required=True, help="JSONL stream file")
     p_replay.add_argument("--out", default="./runs/events.jsonl")
     p_replay.set_defaults(func=cmd_replay)
+
+    # serve (NEW)
+    p_serve = subparsers.add_parser("serve", help="Start the SLRAG server with UI")
+    p_serve.add_argument("--host", default="127.0.0.1", help="Bind host")
+    p_serve.add_argument("--port", type=int, default=8000, help="Bind port")
+    p_serve.add_argument("--reload", action="store_true", help="Enable auto-reload")
+    p_serve.set_defaults(func=cmd_serve)
 
     # chat
     p_chat = subparsers.add_parser("chat", help="Interactive chat session")
