@@ -1,10 +1,10 @@
 import pytest
 import numpy as np
-from slrag.core.session import SessionState
+from slrag.core.session import ControllerState
 
 @pytest.fixture
 def session():
-    return SessionState(session_id="test-session")
+    return ControllerState(session_id="test-session")
 
 class MockBM25Index:
     def __init__(self, discriminative=True):

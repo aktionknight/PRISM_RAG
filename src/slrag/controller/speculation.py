@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional
 
 from slrag.core.config import get_controller_config
-from slrag.core.session import SessionState
+from slrag.core.session import ControllerState
 
 def detect_contradiction(new_chunk_text: str, current_drift: float) -> bool:
     """
@@ -23,7 +23,7 @@ def detect_contradiction(new_chunk_text: str, current_drift: float) -> bool:
             
     return False
 
-def process_speculation(chunk_text: str, current_drift: float, session: SessionState) -> None:
+def process_speculation(chunk_text: str, current_drift: float, session: ControllerState) -> None:
     """
     Manage the lifecycle of speculative branches.
     If contradiction detected -> CANCEL and demote to pool.

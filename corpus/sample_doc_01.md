@@ -1,0 +1,19 @@
+# sample_doc_01.md - Venue Booking Policy Document
+
+# 1. Introduction
+Welcome to the mock venue booking policy. This document outlines the general rules, guidelines, and terms for booking our premium event spaces. Please read through these carefully before confirming your reservation.
+
+# 2. Venue Capacity
+Our venue offers multiple spaces to accommodate different event sizes. The Grand Hall can host up to 500 guests for a standing reception and 350 for a seated dinner. The Garden Pavilion is suitable for smaller gatherings, accommodating up to 150 guests standing and 100 seated. The Executive Boardroom is strictly for corporate meetings with a maximum capacity of 20 people. Exceeding these capacities is strictly prohibited due to fire safety regulations.
+
+# 3. Pricing and Payment
+Pricing varies by day and season. Standard rates for the Grand Hall are $5,000 per day on weekdays (Monday-Thursday) and $8,500 on weekends (Friday-Sunday). The Garden Pavilion costs $2,500 on weekdays and $4,000 on weekends. A 50% non-refundable deposit is required at the time of booking to secure your date. The remaining balance must be paid in full at least 30 days prior to the event date. Late payments will incur a 5% weekly penalty.
+
+# 4. Cancellation Terms
+We understand that plans can change. If you cancel your event more than 90 days in advance, you will receive a full refund minus a $500 administrative fee. Cancellations made between 31 and 90 days before the event will result in the forfeiture of the 50% deposit. Any cancellations made 30 days or less prior to the event date will be charged the full rental amount, and no refunds will be issued. Rescheduling is treated as a cancellation unless approved in writing by management.
+
+# 5. Catering Options
+Clients must use our exclusive list of approved caterers for all food and beverage services. Outside catering is not permitted under any circumstances due to health and liability concerns. If you wish to bring your own alcohol, a corkage fee of $25 per bottle applies, and it must be served by our licensed bartending staff. All catering final headcounts must be submitted 14 days before the event.
+
+# 6. Logistics and Setup
+Access to the venue for setup is granted starting at 8:00 AM on the day of the event. All events must conclude by midnight, and the space must be completely vacated by 1:00 AM. Any vendors or equipment left past this time will result in an overtime charge of $500 per hour. Deliveries must be coordinated at least 48 hours in advance through the loading dock.

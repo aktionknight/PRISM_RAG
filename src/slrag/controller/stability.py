@@ -3,7 +3,7 @@ from typing import Optional, Any
 
 from slrag.core.schemas import ControllerDecision
 from slrag.core.config import get_controller_config
-from slrag.core.session import SessionState
+from slrag.core.session import ControllerState
 from slrag.controller.content_floor import count_content_anchors
 
 # Lazy load embedding model
@@ -29,7 +29,7 @@ def _get_encoder(encoder_mock: Any = None):
 def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-def evaluate_stability(prefix: str, t_s: float, session: SessionState, encoder_mock: Any = None) -> Optional[ControllerDecision]:
+def evaluate_stability(prefix: str, t_s: float, session: ControllerState, encoder_mock: Any = None) -> Optional[ControllerDecision]:
     """
     Stage 3 — Embedding Stability.
     

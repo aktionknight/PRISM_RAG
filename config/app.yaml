@@ -1,13 +1,22 @@
-# Walking-skeleton feature flags (C_TEAM_COORDINATION §5).
-# If a module is not ready at an integration checkpoint the skeleton keeps
-# running on its stub instead of blocking the other three.
-use_stub_controller: true     # Diya    — Component 1
-use_stub_decomposer: true     # Aakrit  — Component 2
-use_stub_retriever: true      # Aakrit  — Component 3
-use_stub_synthesis: false     # Sivansh — Component 4 (real SynthesisEngine landed D2)
+# Application-level configuration
+# Walking-skeleton feature flags (C_TEAM_COORDINATION §3/§5): if a module is not ready
+# at an integration checkpoint the skeleton keeps running on its stub.
+modules:
+  use_stub_controller: true      # Diya    — Component 1 (real cascade merged; harness not yet wired)
+  use_stub_decomposer: true      # Aakrit  — Component 2
+  use_stub_retriever: true       # Aakrit  — Component 3
+  use_stub_synthesizer: false    # Sivansh — Component 4 (real SynthesisEngine)
 
 # Session store (core/session.py, HC-4): in-process memory only; a session is
 # destroyed when ended, when idle past ttl_s, or at shutdown.
 session:
-  ttl_s: 1800          # idle seconds before a session is destroyed
+  ttl_s: 1800          # idle seconds before a session is destroyed (SessionStore)
   max_sessions: 256    # beyond this, the least-recently-used idle session is ended
+
+engine:
+  max_llm_calls_per_turn: 3     # HC-5: parsimony constraint
+  refractory_ms: 250             # Controller refractory period
+
+server:
+  host: "0.0.0.0"
+  port: 8000

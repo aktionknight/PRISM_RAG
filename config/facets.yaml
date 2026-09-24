@@ -1,60 +1,125 @@
-# Facet taxonomy — frozen at the Day-1 AM contract session (C_TEAM_COORDINATION §2).
-# 5–8 facets from a corpus skim; refine later WITHOUT renaming keys (keys are the
-# SubIntent.facet / Claim.facet contract values).
+# FALLBACK facet taxonomy — used only when no corpus-generated taxonomy exists.
 #
-# Fields
-#   label              human-readable name (answer sectioning, UI)
-#   uncertainty_label  noun phrase used in Component 4 uncertainty sentences
-#   retrieval_family   policy | descriptive  -> facet-routed RRF weights (retrieval.yaml, S-8)
-#   keywords           lexical cues for facet tagging / pool-first resolution
+# At runtime every component prefers `.index/facets.yaml`, written by Phase 0 facet
+# discovery (src/slrag/ingest/facet_discovery.py) from whatever corpus is loaded. That
+# is the corpus-independent path (AGENTS.md rule 3). This file was skimmed from the
+# brief's example corpus, so its vocabulary is example-specific by nature: nothing may
+# depend on it for correctness, and unknown facet keys must always work (labels fall
+# back to a readable form of the key).
+#
+# Keys are the SubIntent.facet / Claim.facet contract values; don't rename them without
+# pinging all 4 owners.
+#
+# Fields (all optional)
+#   display / description  facet tagging by embedding (Component 2) and display
+#   label                  human-readable name (answer sectioning, UI; Component 4)
+#   uncertainty_label      noun phrase in Component 4 uncertainty sentences
+#   retrieval_bias         sparse | dense | balanced  -> retrieval weighting (Component 3)
+#   retrieval_family       policy | descriptive (legacy name for the same routing)
+#   keywords               lexical cues for keyword facet tagging (Component 2)
 
-version: 1
+version: 2
+default_facet: general
 
 facets:
   venue_capacity:
+    display: "Venue Capacity"
+    description: "Room sizes, headcount limits, seating arrangements"
     label: Venue capacity
     uncertainty_label: Venue capacity details
+    retrieval_bias: dense
     retrieval_family: descriptive
     keywords: [capacity, seats, holds, accommodate, people, attendees, layout, venue]
 
   venue_pricing:
+    display: "Pricing & Payment"
+    description: "Rates, fees, deposits, payment terms"
     label: Pricing and payment
     uncertainty_label: Pricing details
+    retrieval_bias: sparse
     retrieval_family: policy
     keywords: [price, pricing, cost, charges, rate, fee, deposit, payment, inr, usd]
 
+  pricing:
+    display: "Pricing & Costs"
+    description: "Per-head rates, package pricing, additional charges"
+    label: Pricing and costs
+    retrieval_bias: sparse
+
   cancellation_terms:
+    display: "Cancellation & Refund Terms"
+    description: "Cancellation windows, refund tiers, penalties"
     label: Cancellation and refund terms
     uncertainty_label: Cancellation and refund terms
+    retrieval_bias: sparse
     retrieval_family: policy
     keywords: [cancellation, cancel, cancellations, refund, refunds, forfeit, deposit, notice]
 
   catering_options:
+    display: "Catering & Food"
+    description: "Menu types, dietary accommodations, external caterers"
     label: Catering options
     uncertainty_label: Catering accommodation policies
+    retrieval_bias: dense
     retrieval_family: descriptive
     keywords: [catering, caterers, caterer, food, meals, menu, on-site, external]
 
+  procedure:
+    display: "Reservation Procedure"
+    description: "Steps to reserve, required forms, timelines"
+    label: Reservation procedure
+    retrieval_bias: sparse
+
+  comparison:
+    display: "Venue Comparison"
+    description: "Side-by-side feature comparisons across venues"
+    label: Venue comparison
+    retrieval_bias: dense
+
+  eligibility:
+    display: "Eligibility & Approval"
+    description: "Who can reserve, approval chains, role requirements"
+    label: Eligibility and approval
+    retrieval_bias: sparse
+
   travel_reimbursement:
+    display: "Travel Reimbursement"
+    description: "What travel costs are reimbursed and under which conditions"
     label: Travel reimbursement
     uncertainty_label: Travel reimbursement rules
+    retrieval_bias: sparse
     retrieval_family: policy
     keywords: [reimbursement, reimbursed, reimburse, travel, trip, trips, airfare, hotel, per-diem, allowance]
 
   approval_requirements:
+    display: "Approval Requirements"
+    description: "Who must approve, sign-off chains, pre-approval rules"
     label: Approval requirements
     uncertainty_label: Approval requirements
+    retrieval_bias: sparse
     retrieval_family: policy
     keywords: [approval, approved, pre-approved, authorise, authorize, director, manager, head, sign-off]
 
   expense_documentation:
+    display: "Expense Documentation"
+    description: "Receipts, invoices and documents required for claims; payment timing"
     label: Expense documentation and payment
     uncertainty_label: Expense documentation requirements
+    retrieval_bias: sparse
     retrieval_family: policy
     keywords: [receipts, receipt, itemised, invoice, documentation, claims, payroll, submitted, filed]
 
   logistics:
+    display: "Logistics & Facilities"
+    description: "AV equipment, parking, accessibility, check-in/out"
     label: Logistics and access
     uncertainty_label: Logistics details
+    retrieval_bias: dense
     retrieval_family: descriptive
     keywords: [parking, transport, access, av, projector, wifi, directions, location, breakout]
+
+  general:
+    display: "General"
+    description: "Anything that fits no other facet"
+    label: General
+    retrieval_bias: balanced

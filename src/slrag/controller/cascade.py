@@ -3,7 +3,7 @@ import time
 import numpy as np
 
 from slrag.core.schemas import TranscriptChunk, ControllerDecision
-from slrag.core.session import SessionState
+from slrag.core.session import ControllerState
 from slrag.core.config import get_controller_config
 from slrag.controller.suppression import evaluate_suppression
 from slrag.controller.content_floor import evaluate_content_floor
@@ -19,7 +19,7 @@ class RetrievalController:
     Implements a strict 5-stage cascade (HC-3).
     """
     
-    def __init__(self, session: SessionState, index_mock: Any = None, encoder_mock: Any = None):
+    def __init__(self, session: ControllerState, index_mock: Any = None, encoder_mock: Any = None):
         self.session = session
         self.index_mock = index_mock
         self.encoder_mock = encoder_mock

@@ -8,25 +8,44 @@ version = "0.1.0"
 description = "Streaming Live RAG engine (PRISM) — Samsung Theme 4"
 requires-python = ">=3.11"
 dependencies = [
-    "pydantic>=2.6",
+    # Core
+    "pydantic>=2.6,<3",
+    "pyyaml>=6.0",
+    "jinja2>=3.1",
     # Language resources (synth/lexicon.py): NLTK stopwords/WordNet/negation/Porter and a
     # spaCy parser replace hand-written word lists; data is baked by scripts/bake_nli_model.py.
     "nltk>=3.8",
     "spacy>=3.7",
-    # Component 1 (controller): BM25 discriminativeness probe + embedding stability
+    # Retrieval (Components 1-3): BM25 probe/index, dense index, embeddings, clustering
     "bm25s>=0.2",
     "PyStemmer>=2.2",
+    "faiss-cpu>=1.7",
     "sentence-transformers>=2.2",
     "numpy>=1.24",
-    "pyyaml>=6.0",
-    "jinja2>=3.1",
+    "scikit-learn>=1.3",
+    # LLM client (Component 2 decomposer)
+    "aiohttp>=3.9",
+    # API
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "websockets>=12.0",
+    # Telemetry (core — always on)
+    "ulid-py>=1.1",
+    # Telemetry (obs profile)
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp>=1.20",
+    "prometheus-client>=0.20",
 ]
 
 [project.optional-dependencies]
-# Component 4 NLI verifier backend (nli-deberta-v3-small). Optional: the
-# deterministic lexical scorer is the default so CI stays offline.
+# Component 4 NLI verifier backend (nli-deberta-v3-small); weights baked at build time.
 nli = ["sentence-transformers>=2.7"]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "ruff>=0.3"]
+asr = ["faster-whisper>=1.0"]
+
+[project.scripts]
+slrag = "slrag.api.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -35,3 +54,7 @@ where = ["src"]
 pythonpath = ["src", "."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

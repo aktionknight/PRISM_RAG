@@ -25,7 +25,9 @@ import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, Generic, Protocol, TypeVar
+from typing import Any, Dict, Generic, Optional, Protocol, TypeVar
+
+from slrag.core.schemas import Claim, ClaimStatus, EvidencePoolEntry, SubIntent, VersionLineage
 
 
 class Destroyable(Protocol):
@@ -177,8 +179,8 @@ class SessionStore(Generic[T]):
 
 
 # ---------------------------------------------------------------------------
-# Component 1 (Diya): controller-side session state — evidence pool, speculation, prefix.
-# Held per session alongside the Component 4 engine; destroyed with it (HC-4).
+# Component 1 (Diya): controller-side state — speculation branches, running prefix,
+# refractory timer. Lives on ``SessionState.controller``; destroyed with the session (HC-4).
 # ---------------------------------------------------------------------------
 class EvidencePool:
     """Session-scoped, chunk-ID-keyed store for retrieved evidence."""
@@ -200,10 +202,10 @@ class EvidencePool:
         self.add_chunk(chunk_id, data)
 
 
-class SessionState:
-    """In-process, ephemeral session state."""
+class ControllerState:
+    """Controller-side, ephemeral per-session state (was ``SessionState`` on the diya branch)."""
     
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str = ""):
         self.session_id = session_id
         self.evidence_pool = EvidencePool()
         
@@ -222,3 +224,104 @@ class SessionState:
         self.current_prefix = ""
         self.last_embedding = None
         self.last_retrieve_time = -1000.0
+
+
+# ---------------------------------------------------------------------------
+# Session owner (Aakrit): IntentSet, EvidencePool, ClaimGraph snapshot and the
+# controller state for one session. In-process only (HC-4).
+# ---------------------------------------------------------------------------
+@dataclass
+class SessionState:
+    """Ephemeral state for a single user session.
+
+    This is the single in-process store satisfying HC-4.
+    Contains the IntentSet, EvidencePool, and ClaimGraph.
+    """
+
+    session_id: str = ""
+    turn_id: int = 0
+    answer_version: int = 0
+    created_at: float = field(default_factory=time.time)
+    ttl_seconds: float = 3600.0  # 1 hour default
+
+    # ── IntentSet (Component 2 — Aakrit) ──
+    # Monotonic: only ever grows.  Keyed by intent_id.
+    intent_set: dict[str, SubIntent] = field(default_factory=dict)
+
+    # ── EvidencePool (Component 3 — Aakrit) ──
+    # Every chunk ever retrieved, keyed by chunk_id.
+    evidence_pool: dict[str, EvidencePoolEntry] = field(default_factory=dict)
+
+    # ── ClaimGraph (Component 4 — Sivansh) ──
+    claims: list[Claim] = field(default_factory=list)
+    version_lineage: list[VersionLineage] = field(default_factory=list)
+
+    # ── Previous prefix embedding for drift detection ──
+    prev_prefix_embedding: Optional[list[float]] = None
+
+    # ── Controller state (Component 1 — Diya) ──
+    controller: ControllerState = field(default_factory=ControllerState)
+
+    def __post_init__(self) -> None:
+        self.controller.session_id = self.session_id
+
+    @property
+    def is_expired(self) -> bool:
+        return (time.time() - self.created_at) > self.ttl_seconds
+
+    @property
+    def active_claims(self) -> list[Claim]:
+        return [c for c in self.claims if c.status == ClaimStatus.active]
+
+    @property
+    def all_citation_labels(self) -> set[str]:
+        """The closed citation allowlist — union of all evidence pool labels."""
+        return {entry.citation_label for entry in self.evidence_pool.values()}
+
+    def new_turn(self) -> int:
+        """Advance the turn counter and return the new turn_id."""
+        self.turn_id += 1
+        return self.turn_id
+
+    def new_version(self) -> int:
+        """Advance the answer version counter and return the new version."""
+        self.answer_version += 1
+        return self.answer_version
+
+    def add_evidence(self, entry: EvidencePoolEntry) -> None:
+        """Add or update an evidence pool entry (idempotent by chunk_id)."""
+        existing = self.evidence_pool.get(entry.chunk_id)
+        if existing:
+            # Merge scores and version usage; keep earliest retrieval time
+            existing.scores_by_subquery.update(entry.scores_by_subquery)
+            existing.used_in_versions = list(
+                set(existing.used_in_versions) | set(entry.used_in_versions)
+            )
+            existing.first_retrieved_ts = min(
+                existing.first_retrieved_ts, entry.first_retrieved_ts
+            )
+            # If it was speculative and is now confirmed, mark confirmed
+            if not entry.speculative:
+                existing.speculative = False
+        else:
+            self.evidence_pool[entry.chunk_id] = entry
+
+    def get_dispatched_intents(self) -> list[SubIntent]:
+        """Return all intents that have already been dispatched for retrieval."""
+        return [i for i in self.intent_set.values() if i.dispatched]
+
+    def get_pending_intents(self) -> list[SubIntent]:
+        """Return all intents pending dispatch."""
+        return [
+            i for i in self.intent_set.values()
+            if not i.dispatched and i.status.value == "pending"
+        ]
+
+    def destroy(self) -> None:
+        """Explicitly clear all session state — called on session end."""
+        self.intent_set.clear()
+        self.evidence_pool.clear()
+        self.claims.clear()
+        self.version_lineage.clear()
+        self.prev_prefix_embedding = None
+        self.controller.clear()

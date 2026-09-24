@@ -8,23 +8,29 @@ from tests.helpers import FIXTURES, load_corpus, load_scenarios, load_stream, sp
 
 
 def test_stubs_return_schema_valid_output():
-    chunk = load_stream("golden_example.jsonl")[1]
-    decision = fake_controller(chunk)
-    assert isinstance(decision, ControllerDecision) and decision.decision == "RETRIEVE"
-    intents = fake_decompose(chunk.text)
+    from slrag.stubs.fake_controller import reset_stub
+
+    reset_stub()
+    stream = load_stream("golden_example.jsonl")
+    decisions = [fake_controller(chunk) for chunk in stream]
+    assert all(isinstance(d, ControllerDecision) for d in decisions)
+    assert decisions[0].decision == "WAIT" and decisions[-1].decision == "RETRIEVE"
+    intents = fake_decompose(stream[1].text)
     assert all(isinstance(i, SubIntent) for i in intents)
     chunks = fake_retrieve(intents[0])
     assert all(isinstance(c, RetrievedChunk) for c in chunks)
-    output = fake_synthesize([])
+    output = fake_synthesize()
     assert isinstance(output, AnswerOutput)
     AnswerOutput.model_validate(json.loads(output.model_dump_json()))
 
 
 def test_stub_retriever_chunk_matches_fixture_corpus_identity():
-    stub = fake_retrieve(fake_decompose("")[0])[0]
+    """Stub chunks carry real fixture identities, so their citations resolve in the corpus."""
+    intent = SubIntent(intent_id="i1", facet="venue_capacity", query_nl="q", search_string="q", novel=True)
+    stub = fake_retrieve(intent)[0]              # the decomposer stub is stateful; ask the retriever directly
     fixture = load_corpus()[stub.chunk_id]
     assert (stub.doc_id, stub.section_id) == (fixture.doc_id, fixture.section_id)
-    assert fixture.text.startswith(stub.text)
+    assert stub.citation_label == f"{fixture.doc_id} §{fixture.section_id}"
 
 
 def test_golden_streams_are_schema_valid_and_monotonic_per_turn():
