@@ -2,12 +2,13 @@ PYTHON ?= .venv/bin/python
 
 .PHONY: setup setup-nli test test-nli bench-c4 calibrate-nli ablate-a3
 
-setup:                ## core + dev deps; CI and golden replay stay offline (lexical verifier)
+setup:                ## core + dev deps, plus NLTK data and the spaCy pipeline baked into models/ (never at runtime)
 	$(PYTHON) -m pip install -e ".[dev]"
+	$(PYTHON) scripts/bake_nli_model.py --nltk --spacy --no-nli
 
 setup-nli: setup      ## Component 4 NLI verifier: deps + weights baked at build time (never at runtime)
-	$(PYTHON) -m pip install -e ".[nli,ner]"
-	$(PYTHON) scripts/bake_nli_model.py --spacy
+	$(PYTHON) -m pip install -e ".[nli]"
+	$(PYTHON) scripts/bake_nli_model.py
 
 test:
 	$(PYTHON) -m pytest -q

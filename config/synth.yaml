@@ -6,12 +6,10 @@ version: 1
 # Shared lexical utilities (synth/text.py) — used by generator, verifier, delta
 # ---------------------------------------------------------------------------
 text:
-  stopwords: [a, an, the, and, or, of, to, in, "on", for, with, by, at, from, is, are, was,
-              were, be, been, being, it, its, this, that, these, those, as, per, up, than,
-              more, less, into, only, all, any, can, may, will, must, shall, should, not, "no",
-              do, does, did, has, have, had, their, there, which, who, whom, what, when,
-              where, how, i, you, we, they, he, she, my, your, our, me, us, need, want,
-              like, about, also, so, if, then, just, please]
+  nltk_data_path: models/nltk_data    # NLTK stopwords + WordNet, baked at build time (never downloaded at runtime)
+  # Stopwords are NLTK's English list; these are request / modal words it omits.
+  extra_stopwords: [may, might, must, shall, could, would, per, also, please, need, want, like, upon, via]
+  irregular_nouns: {people: person}   # English irregular plural WordNet files under noun.group
 
 # ---------------------------------------------------------------------------
 # Generator (synth/generator.py) — the single synthesis LLM call per turn (HC-5)
@@ -49,23 +47,15 @@ verifier:
   reattribute_on_failure: true        # try other in-context chunks before retracting
   demote_on_fabricated: true          # A §4.4: a fabricated ID demotes its sentence (no re-attribution rescue)
   polarity_check: true                # entailing clause and sentence must agree on negation (lexical scorer is blind to it)
-  negation_cues: [not, "no", never, none, nor, neither, cannot, without, nothing, nobody, nowhere]   # plus "n't"
+  # Negation cues are NLTK's list (nltk.sentiment.util.NEGATION); these closed-class cues it omits are added.
+  negation_extra: [without, nor, neither, cannot, nobody]
   negation_exempt:                    # cue phrases that are not negations (audit N-1)
     - '\bnot only\b'
     - '\b(?:no|not) (?:more|less|fewer|later|earlier|greater) than\b'
   clause_splitters: [',\s+(?:and|but|while|whereas|except)\s+', '\s+but\s+']   # each side keeps its own polarity
-  antonym_pairs:                      # generic English stems (regex, matched as word prefixes); a swap flips polarity
-    - [accept, reject]
-    - [approv, reject]
-    - [approv, 'den(?:y|ied|ies|ial)']
-    - [includ, exclud]
-    - [allow, 'prohibit|forbid|forbidden']
-    - [permit, 'prohibit|forbid|forbidden']
-    - [refund, forfeit]
-    - ['requir|mandatory|compulsory|must', optional]
-    - [increas, decreas]
-    - [maximum, minimum]
-    - [before, after]
+  # Antonyms come from WordNet (direct antonyms + adjective satellites). Add pairs here only
+  # for vocabulary WordNet lacks; nothing in the default config is specific to a corpus.
+  extra_antonym_pairs: []
   regenerate_on_retract: false        # HC-5: regeneration would exceed the <=3 LLM calls/turn budget
   entity_backend: regex               # regex | spacy (adds NER names the regex misses, e.g. sentence-initial; W-6)
   spacy:

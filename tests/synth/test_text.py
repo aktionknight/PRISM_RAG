@@ -13,14 +13,18 @@ STOP = stopwords_from(load_synth_config())
 
 
 def test_tokenize_stems_and_normalises_numerals():
-    assert tokenize("Cancellations forfeit the 25% deposit of INR 45,000") == [
-        "cancellation", "forfeit", "the", "25%", "deposit", "of", "inr", "45000",
-    ]
-    assert tokenize("on-site catering policies") == ["on-site", "catering", "policy"]
+    """Porter stemming (NLTK): numerals lose separators, word forms of one lemma collapse."""
+    tokens = tokenize("Cancellations forfeit the 25% deposit of INR 45,000")
+    assert tokens[2:] == ["the", "25%", "deposit", "of", "inr", "45000"]
+    assert tokenize("cancellation cancelled cancelling") == [tokens[0]] * 3
+    assert tokenize("reimbursed reimbursement reimburses")[0] == tokenize("reimbursement")[0]
+    assert tokenize("on-site catering policies") == tokenize("on-site catered policy")
 
 
 def test_content_tokens_drop_stopwords_and_single_letters():
-    assert content_tokens("Venue B seats up to 60 people", STOP) == ["venue", "seat", "60", "people"]
+    """Stopwords come from NLTK's English list; single letters ("B") are dropped."""
+    assert content_tokens("Venue B seats up to 60 people", STOP) == tokenize("venue seats 60 people")
+    assert {"the", "of", "and", "not", "please"} <= STOP
 
 
 def test_overlap_is_directional():

@@ -40,6 +40,29 @@ def check(path: Path, labels: list[str]) -> None:
     print(f"ok: {path} labels {model_labels}")
 
 
+def bake_nltk(*, check_only: bool) -> None:
+    """NLTK stopwords + WordNet into ``text.nltk_data_path`` (read offline by synth/lexicon.py)."""
+    import nltk
+
+    path = resolve_path(load_synth_config().get("text", {}).get("nltk_data_path", "models/nltk_data"))
+    if not check_only:
+        try:
+            import certifi   # python.org macOS builds ship without a CA bundle
+            import os
+
+            os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+        except ImportError:
+            pass
+        for package in ("stopwords", "wordnet", "omw-1.4"):
+            if not nltk.download(package, download_dir=str(path), quiet=True):
+                raise SystemExit(f"could not download NLTK package {package!r}")
+    nltk.data.path.insert(0, str(path))
+    from nltk.corpus import stopwords, wordnet
+
+    print(f"ok: {path} -> {len(stopwords.words('english'))} stopwords, "
+          f"accept <-> {sorted(a.name() for l in wordnet.synsets('accept', 'v')[0].lemmas() for a in l.antonyms())}")
+
+
 def bake_spacy(*, check_only: bool, package: str = "en_core_web_sm") -> None:
     """Copy the spaCy pipeline to ``verifier.spacy.model_path`` so runtime loads it from disk."""
     import spacy
@@ -63,11 +86,16 @@ def main() -> None:
     parser.add_argument("--repo-id", default=DEFAULT_REPO_ID, help="Hugging Face model id")
     parser.add_argument("--revision", default=None, help="pin a model revision (commit hash) for reproducible builds")
     parser.add_argument("--check", action="store_true", help="only verify an existing bake")
-    parser.add_argument("--spacy", action="store_true",
-                        help="also bake the spaCy NER model for verifier.entity_backend: spacy (W-6)")
+    parser.add_argument("--spacy", action="store_true", help="also bake the spaCy pipeline (parser + NER)")
+    parser.add_argument("--nltk", action="store_true", help="also bake NLTK stopwords + WordNet (synth/lexicon.py)")
+    parser.add_argument("--no-nli", action="store_true", help="skip the NLI cross-encoder (lexicon-only setup)")
     args = parser.parse_args()
+    if args.nltk:
+        bake_nltk(check_only=args.check)
     if args.spacy:
         bake_spacy(check_only=args.check)
+    if args.no_nli:
+        return
 
     cfg = load_synth_config().get("verifier", {}).get("cross_encoder", {})
     path = resolve_path(cfg.get("model_path", "models/nli-deberta-v3-small"))

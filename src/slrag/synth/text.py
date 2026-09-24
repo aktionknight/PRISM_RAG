@@ -2,13 +2,15 @@
 
 One tokeniser for the generator (relevance), the verifier (lexical entailment,
 copy check) and the delta engine (pool-first resolution), so the three can
-never disagree about what "the same word" means. Lexicons come from
-``config/synth.yaml`` ``text:`` (HC-2).
+never disagree about what "the same word" means. Stemming is NLTK's Porter
+stemmer and stopwords are NLTK's English list (``synth/lexicon.py``), so nothing
+here is tuned to a particular corpus.
 """
 
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Any, Iterable
 
 _TOKEN_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?|[a-z]+(?:-[a-z]+)*")
@@ -21,19 +23,21 @@ _PROPER_RE = re.compile(r"\b[A-Z][a-zA-Z]+(?:\s+(?:[A-Z][a-zA-Z]+|[A-Z0-9]\b))*"
 
 
 def stopwords_from(config: dict[str, Any] | None) -> frozenset[str]:
-    return frozenset((config or {}).get("text", {}).get("stopwords", ()))
+    """NLTK English stopwords + ``text.extra_stopwords``."""
+    from slrag.synth.lexicon import stopwords
+
+    return stopwords(config)
 
 
+@lru_cache(maxsize=65536)
 def _stem(token: str) -> str:
     if token[0].isdigit():
         return token.replace(",", "")
     if token.endswith("'s"):
         token = token[:-2]
-    if len(token) > 4 and token.endswith("ies"):
-        return token[:-3] + "y"
-    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
-        return token[:-1]
-    return token
+    from slrag.synth.lexicon import _porter
+
+    return "-".join(_porter().stem(part) for part in token.split("-"))
 
 
 def tokenize(text: str) -> list[str]:

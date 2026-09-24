@@ -29,6 +29,7 @@ from typing import Any, AsyncIterable, AsyncIterator, Callable, Iterable, Protoc
 from slrag.core.citations import find_markers, label_for_chunk, normalize_label
 from slrag.core.schemas import RetrievedChunk
 from slrag.synth.config import load_synth_config, resolve_path
+from slrag.synth.lexicon import WordNet, negation_regex
 from slrag.synth.text import (
     content_tokens,
     extract_numerals,
@@ -44,6 +45,7 @@ _WS_RE = re.compile(r"\s+")
 _SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([.,;:!?)])")
 _END = object()          # immutable end-of-stream sentinel for the draft iterator
 _POSSESSIVE_RE = re.compile(r"['’]s?$")
+_WORD_RE = re.compile(r"[a-z]+(?:-[a-z]+)*")
 
 
 def _config(config: dict[str, Any] | None) -> dict[str, Any]:
@@ -320,28 +322,30 @@ class PolarityCheck:
     content tokens, and the two must agree on polarity. When several premise
     clauses tie as best match, the sentence passes if any of them agrees.
 
-    Polarity = parity of negation cues (``verifier.negation_cues`` plus "n't"), minus
-    exempt phrases that are not negations ("not only", "no more than"), XOR the parity
-    of antonym swaps: a clause term whose antonym (``verifier.antonym_pairs``) is in the
-    aligned premise clause while the term itself is not ("refunded" vs "forfeit",
-    "rejected" vs "accepted"). So "rejected" still agrees with "not accepted".
+    Polarity = parity of negation cues (NLTK's ``nltk.sentiment.util.NEGATION`` list plus
+    ``verifier.negation_extra``), minus exempt phrases that are not negations ("not
+    only", "no more than"), XOR the parity of antonym swaps: a clause word whose WordNet
+    antonym is in the aligned premise clause while the word itself is not ("rejected" vs
+    "accepted", "excludes" vs "includes", "optional" vs "mandatory"). So "rejected"
+    still agrees with "not accepted". No word list is specific to any corpus; add
+    ``verifier.extra_antonym_pairs`` only for vocabulary WordNet lacks.
     Clauses split at sentence ends, ``;`` / ``:`` and ``verifier.clause_splitters``.
     """
 
     def __init__(self, config: dict[str, Any] | None = None) -> None:
         config = _config(config)
         cfg = config.get("verifier", {})
-        cues = [str(cue) for cue in cfg.get("negation_cues", ())]
-        alternatives = [r"\b(?:" + "|".join(map(re.escape, cues)) + r")\b"] if cues else []
-        self._negation_re = re.compile("|".join([*alternatives, r"n['’]t\b"]), re.IGNORECASE)
+        self._negation_re = negation_regex(config)
         exempt = [str(p) for p in cfg.get("negation_exempt", ())]
         self._exempt_re = re.compile("|".join(exempt), re.IGNORECASE) if exempt else None
         splitters = [str(p) for p in cfg.get("clause_splitters", ())]
         self._splitter_re = re.compile("|".join(splitters), re.IGNORECASE) if splitters else None
-        self._antonyms = [
-            (re.compile(r"\b(?:" + str(a) + r")\w*", re.IGNORECASE), re.compile(r"\b(?:" + str(b) + r")\w*", re.IGNORECASE))
-            for a, b in (cfg.get("antonym_pairs") or ())
-        ]
+        self._wordnet = WordNet(config)
+        self._extra: dict[str, set[str]] = {}
+        for a, b in cfg.get("extra_antonym_pairs") or ():
+            a, b = self._wordnet.lemma(str(a)), self._wordnet.lemma(str(b))
+            self._extra.setdefault(a, set()).add(b)
+            self._extra.setdefault(b, set()).add(a)
         self._stopwords = stopwords_from(config)
 
     def negated(self, text: str) -> bool:
@@ -350,14 +354,17 @@ class PolarityCheck:
         return len(self._negation_re.findall(text)) % 2 == 1
 
     def swaps(self, clause: str, premise_clause: str) -> int:
-        """Antonym pairs used one way round in ``clause`` and the other in ``premise_clause``."""
+        """Words of ``clause`` whose WordNet antonym is in ``premise_clause`` (and not vice versa)."""
+        mine, theirs = self._lemmas(clause), self._lemmas(premise_clause)
         count = 0
-        for a, b in self._antonyms:
-            for mine, theirs in ((a, b), (b, a)):
-                if (mine.search(clause) and not theirs.search(clause)
-                        and theirs.search(premise_clause) and not mine.search(premise_clause)):
-                    count += 1
+        for word in mine - theirs:
+            opposites = self._wordnet.antonyms(word) | self._extra.get(word, set())
+            if (opposites & theirs) - mine:
+                count += 1
         return count
+
+    def _lemmas(self, text: str) -> set[str]:
+        return {self._wordnet.lemma(w) for w in _WORD_RE.findall(text.lower()) if w not in self._stopwords}
 
     def clauses(self, text: str) -> list[str]:
         out = split_clauses(text)

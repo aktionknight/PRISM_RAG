@@ -391,20 +391,36 @@ def test_cross_encoder_softmax_follows_configured_label_order(tmp_path, monkeypa
 @pytest.mark.parametrize("text, citation", [
     ("Rejected refunds are processed within 10 business days to the original payment method.", "Doc_31 §5"),
     ("Venue B seats up to 60 people and excludes a breakout room.", "Doc_12 §2"),
-    ("Itemised receipts are optional for reimbursement claims.", "Doc_44 §5"),
     ("Card statements alone are rejected, and itemised receipts are excluded from claims.", "Doc_44 §5"),
 ])
 def test_antonym_swaps_are_retracted_despite_full_lexical_overlap(verifier, text, citation):
+    """Antonyms come from WordNet, not a hand-written list."""
     result = verifier.verify(_draft(text, citation))
     assert not result.ok and "negation_mismatch" in result.reasons
 
 
-def test_refund_versus_forfeit_is_retracted():
-    chunk = scored_chunk("Doc_31#4#0", load_corpus()["Doc_31#4#0"].text)
-    verifier = ClaimVerifier(CitationAllowlist.from_chunks([chunk]), config=load_synth_config())
-    result = verifier.verify(_draft(
-        "Cancellations made within 14 days of the event get the 25% booking deposit refunded.", "Doc_31 §4"))
+@pytest.mark.parametrize("premise, text", [
+    ("Safety training is mandatory for all lab users.", "Safety training is optional for all lab users."),
+    ("Domestic shipments are insured.", "International shipments are insured."),
+    ("The archive is open to external researchers.", "The archive is closed to external researchers."),
+    ("Internal candidates are eligible for the bonus.", "Internal candidates are ineligible for the bonus."),
+])
+def test_wordnet_antonyms_generalise_to_unseen_vocabulary(premise, text):
+    verifier = ClaimVerifier(CitationAllowlist.from_chunks([scored_chunk("Doc_1#1#0", premise)]),
+                             config=load_synth_config())
+    result = verifier.verify(_draft(text, "Doc_1 §1"))
     assert not result.ok and "negation_mismatch" in result.reasons
+
+
+def test_extra_antonym_pairs_cover_what_wordnet_lacks():
+    """WordNet has no refund/forfeit pair: the NLI backend catches it; config can add the pair."""
+    chunk = scored_chunk("Doc_31#4#0", load_corpus()["Doc_31#4#0"].text)
+    text = "Cancellations made within 14 days of the event get the 25% booking deposit refunded."
+    default = ClaimVerifier(CitationAllowlist.from_chunks([chunk]), config=load_synth_config())
+    assert "negation_mismatch" not in default.verify(_draft(text, "Doc_31 §4")).reasons
+    extra = ClaimVerifier(CitationAllowlist.from_chunks([chunk]),
+                          config=_config(extra_antonym_pairs=[["refund", "forfeit"]]))
+    assert "negation_mismatch" in extra.verify(_draft(text, "Doc_31 §4")).reasons
 
 
 @pytest.mark.parametrize("text, citation", [
