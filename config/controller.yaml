@@ -1,0 +1,65 @@
+# Retrieval Controller — Tunable Thresholds
+# HC-2: No magic numbers in application code. All thresholds live here.
+# Calibrated via Phase 2 sweep (early-trigger-rate vs false-trigger-rate curve, knee selected).
+
+# Stage 2 — BM25 Corpus Discriminativeness Probe
+tau_hi: 0.35          # margin above this → RETRIEVE (corpus is discriminative)
+tau_lo: 0.10          # margin below this → WAIT (corpus is ambiguous)
+h_lo: 0.65            # normalised entropy below this → peaked distribution
+top_k_probe: 10       # number of top BM25 results to analyse
+margin_top_n: 5       # number of top scores for margin denominator (s2..sN)
+
+# Stage 3 — Embedding Stability
+epsilon: 0.15         # drift below this → intent has stabilised
+content_anchor_min: 2 # minimum content anchors required for stability trigger
+
+# Cascade — Refractory Period
+refractory_ms: 250.0  # cooldown between consecutive RETRIEVE decisions (ms)
+
+# Speculation Manager
+speculation_drift_delta: 0.30  # embedding drift above this → cancel speculative branch
+self_correction_markers:
+  - "actually"
+  - "no wait"
+  - "sorry"
+  - "i meant"
+  - "scratch that"
+  - "never mind"
+  - "forget that"
+  - "not that"
+  - "wait no"
+  - "let me rephrase"
+  - "correction"
+
+# Stage 0 — Suppression Gate
+presentation_verbs:
+  - "repeat"
+  - "rephrase"
+  - "shorten"
+  - "summarize"
+  - "summarise"
+  - "bullets"
+  - "bullet points"
+  - "translate"
+  - "tone"
+  - "reformat"
+  - "simplify"
+  - "elaborate"
+  - "expand"
+  - "make it shorter"
+  - "make it longer"
+  - "say that again"
+  - "in other words"
+  - "put it differently"
+
+anaphora_patterns:
+  - "that"
+  - "this"
+  - "it"
+  - "the above"
+  - "your answer"
+  - "your last answer"
+  - "your response"
+  - "the response"
+  - "what you said"
+  - "what you just said"
