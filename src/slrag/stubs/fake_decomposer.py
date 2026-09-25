@@ -22,10 +22,13 @@ def fake_decompose(prefix: str, existing_intents: dict[str, SubIntent] | None = 
     """
     global _SEEN_INTENTS
 
+    seen = existing_intents if existing_intents is not None else _SEEN_INTENTS
+    seen_facets = {intent.facet for intent in seen.values()}
+
     intents = []
 
-    # Always emit venue_capacity
-    if "i1" not in _SEEN_INTENTS:
+    # Always emit venue_capacity if not already present
+    if "i1" not in seen and "venue_capacity" not in seen_facets:
         i1 = SubIntent(
             intent_id="i1",
             facet="venue_capacity",
@@ -35,12 +38,13 @@ def fake_decompose(prefix: str, existing_intents: dict[str, SubIntent] | None = 
             first_seen_ts=0.8,
             status=IntentStatus.dispatched,
         )
-        _SEEN_INTENTS["i1"] = i1
+        if existing_intents is None:
+            _SEEN_INTENTS["i1"] = i1
         intents.append(i1)
 
     # If prefix mentions cancellation or catering, add those
     if "cancellation" in prefix.lower() or len(prefix) > 60:
-        if "i2" not in _SEEN_INTENTS:
+        if "i2" not in seen and "cancellation_terms" not in seen_facets:
             i2 = SubIntent(
                 intent_id="i2",
                 facet="cancellation_terms",
@@ -50,11 +54,12 @@ def fake_decompose(prefix: str, existing_intents: dict[str, SubIntent] | None = 
                 first_seen_ts=1.6,
                 status=IntentStatus.dispatched,
             )
-            _SEEN_INTENTS["i2"] = i2
+            if existing_intents is None:
+                _SEEN_INTENTS["i2"] = i2
             intents.append(i2)
 
     if "catering" in prefix.lower() or len(prefix) > 80:
-        if "i3" not in _SEEN_INTENTS:
+        if "i3" not in seen and "catering_options" not in seen_facets:
             i3 = SubIntent(
                 intent_id="i3",
                 facet="catering_options",
@@ -64,7 +69,8 @@ def fake_decompose(prefix: str, existing_intents: dict[str, SubIntent] | None = 
                 first_seen_ts=1.6,
                 status=IntentStatus.dispatched,
             )
-            _SEEN_INTENTS["i3"] = i3
+            if existing_intents is None:
+                _SEEN_INTENTS["i3"] = i3
             intents.append(i3)
 
     return intents

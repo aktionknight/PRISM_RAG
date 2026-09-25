@@ -12,7 +12,11 @@ import logging
 from typing import Optional
 
 import numpy as np
-import ulid
+
+try:
+    import ulid
+except ImportError:
+    ulid = None
 
 from slrag.core.schemas import IntentStatus, SubIntent
 from slrag.core.session import SessionState
@@ -55,10 +59,12 @@ class IntentSet:
 
     def _generate_intent_id(self) -> str:
         """Generate a unique ID for a new intent."""
-        # Handle different common Python ULID libraries (e.g. python-ulid vs ulid-py)
-        if hasattr(ulid, "new"):
-            return str(ulid.new())
-        return str(ulid.ULID())
+        if ulid is not None:
+            if hasattr(ulid, "new"):
+                return str(ulid.new())
+            return str(ulid.ULID())
+        import uuid, time
+        return f"int_{int(time.time()*1000):x}_{uuid.uuid4().hex[:8]}"
 
     def _get_embedding(self, text: str, model) -> np.ndarray:
         """Get or compute the normalized embedding for a text."""

@@ -14,12 +14,12 @@ replay:
 
 # Run full benchmark suite
 bench:
-	python -m slrag.api.cli replay --stream ./bench/data/suite.jsonl --out ./runs/events.jsonl
-	python -m slrag.api.cli score --run ./runs/events.jsonl --gold ./bench/data/gold.jsonl
+	python bench/generate.py --out ./bench/data/generated
+	python -m bench.metrics --run ./runs/events.jsonl
 
 # Run ablation experiments
 ablate:
-	@echo "Ablation runner not yet implemented (Day 3)"
+	python bench/ablate.py --stream ./bench/data/golden_example.jsonl --out ./runs/ablation.json
 
 # Score a run
 score:

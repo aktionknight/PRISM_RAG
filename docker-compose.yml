@@ -1,0 +1,72 @@
+# Streaming Live RAG — Docker Compose (Samsung Theme 4)
+# Default profile: 'core' (lean engine, zero dependencies)
+# Opt-in profile: 'obs' (OpenTelemetry, Prometheus, Tempo, Grafana)
+
+services:
+  engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: slrag-engine
+    profiles: ["core", "default"]
+    volumes:
+      - ./corpus:/app/corpus:ro
+      - ./runs:/app/runs
+      - ./config:/app/config:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/src
+    command: ["python", "-m", "slrag.api.cli", "replay", "--stream", "./bench/data/golden_example.jsonl", "--out", "./runs/events.jsonl"]
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: slrag-api
+    profiles: ["ui", "demo", "obs"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./corpus:/app/corpus:ro
+      - ./runs:/app/runs
+      - ./config:/app/config:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app/src
+    command: ["python", "-m", "slrag.api.cli", "serve", "--host", "0.0.0.0", "--port", "8000"]
+
+  # ── Observability Stack (Opt-in via --profile obs) ──
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: slrag-prometheus
+    profiles: ["obs"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: slrag-tempo
+    profiles: ["obs"]
+    command: ["-config.file=/etc/tempo/tempo.yml"]
+    ports:
+      - "3200:3200"
+      - "4318:4318"
+    volumes:
+      - ./observability/tempo.yml:/etc/tempo/tempo.yml:ro
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: slrag-grafana
+    profiles: ["obs"]
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    restart: unless-stopped

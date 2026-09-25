@@ -282,6 +282,7 @@ class AnswerOutput(BaseModel):
 
 class TelemetryEvent(BaseModel):
     """A single event written to events.jsonl by the TelemetryBus."""
+    schema_version: str = Field("1.0", description="Telemetry event schema version")
     event_id: str
     session_id: str
     turn_id: int
