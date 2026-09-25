@@ -118,6 +118,41 @@ def cmd_serve(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_score(args: argparse.Namespace) -> None:
+    """Score a run against gold standard."""
+    run_path = Path(args.run)
+    gold_path = Path(args.gold)
+
+    if not run_path.exists():
+        logger.error(f"Run file not found: {run_path}")
+        sys.exit(1)
+
+    if not gold_path.exists():
+        logger.error(f"Gold file not found: {gold_path}")
+        sys.exit(1)
+
+    logger.info(f"Scoring run={run_path} against gold={gold_path}")
+
+    # Import bench.metrics dynamically since it's not in src/
+    try:
+        import sys as _sys
+        bench_dir = Path(__file__).resolve().parents[3] / "bench"
+        if str(bench_dir) not in _sys.path:
+            _sys.path.insert(0, str(bench_dir.parent))
+
+        from bench.metrics import main as bench_main  # type: ignore
+
+        # Call the bench.metrics main function with appropriate args
+        exit_code = bench_main([
+            "--run", str(run_path),
+            "--gold", str(gold_path),
+        ])
+        sys.exit(exit_code)
+    except ImportError as e:
+        logger.error(f"Could not import bench.metrics: {e}")
+        sys.exit(1)
+
+
 def main() -> None:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(

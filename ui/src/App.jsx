@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './index.css';
+import MetricsPanel from './components/MetricsPanel';
 
 const STATUS_CONNECTED = 'Connected';
 const STATUS_DISCONNECTED = 'Disconnected';
@@ -39,6 +40,22 @@ export default function App() {
     totalTokens: 0,
     totalCost: 0,
     answerVersion: 0,
+    sessionId: '—',
+    turnId: 0,
+    totalTokensPrompt: 0,
+    totalTokensCompletion: 0,
+    citationsCount: 0,
+    llmCallsThisTurn: 0,
+    sessionStartTime: null,
+  });
+
+  const [telemetryData, setTelemetryData] = useState({
+    controllerLatencies: [],
+    retrievalLatencies: [],
+    earlyRetrievals: 0,
+    totalChunks: 0,
+    fabricatedIds: 0,
+    traceCoverage: 1.0,
   });
 
   const [inputVal, setInputVal] = useState('');
@@ -98,18 +115,29 @@ export default function App() {
     switch (msg.type) {
       case 'session_created':
         setSessionId(msg.session_id);
+        setStats(s => ({ ...s, sessionId: msg.session_id, sessionStartTime: Date.now() }));
         break;
 
       case 'controller_decision':
         setChunks(prev => [...prev, msg]);
         if (msg.latency_ms) {
           setStats(s => ({ ...s, latencies: [...s.latencies, msg.latency_ms] }));
+          setTelemetryData(t => ({
+            ...t,
+            controllerLatencies: [...t.controllerLatencies.slice(-50), msg.latency_ms],
+            totalChunks: t.totalChunks + 1,
+            earlyRetrievals: msg.decision === 'RETRIEVE' ? t.earlyRetrievals + 1 : t.earlyRetrievals,
+          }));
         }
         break;
 
       case 'subqueries_updated':
         setSubQueries(msg.sub_queries || []);
-        setStats(s => ({ ...s, intentCount: (msg.sub_queries || []).length }));
+        setStats(s => ({
+          ...s,
+          intentCount: msg.total_intents || (msg.sub_queries || []).length,
+          novelIntents: (msg.new_intents || []).length,
+        }));
         break;
 
       case 'retrieval_complete':
@@ -121,7 +149,7 @@ export default function App() {
         setStreamingTokens(prev => [...prev, msg]);
         break;
 
-      case 'answer_version':
+      case 'answer_version': {
         setStreamingTokens([]);
         setFinalAnswer({
           version: msg.version || 1,
@@ -129,12 +157,23 @@ export default function App() {
           answer: msg.answer || '',
         });
         setCitations(msg.citations || []);
+        // Extract telemetry data from synthesis result
+        const tel = msg.telemetry || {};
         setStats(s => ({
           ...s,
           answerVersion: msg.version || 1,
+          turnId: msg.turn_id || 1,
           claimCount: (msg.claims || []).length,
+          citationsCount: (msg.citations || []).length,
+          totalTokens: (tel.total_tokens_prompt || 0) + (tel.total_tokens_completion || 0),
+          totalTokensPrompt: tel.total_tokens_prompt || s.totalTokensPrompt,
+          totalTokensCompletion: tel.total_tokens_completion || s.totalTokensCompletion,
+          totalCost: tel.total_cost_usd || s.totalCost,
+          synthesisLatency: tel.synthesis_latency_ms || 0,
+          llmCallsThisTurn: tel.total_llm_calls || 0,
         }));
         break;
+      }
 
       case 'uncertainty':
         if (msg.text) {
@@ -177,6 +216,21 @@ export default function App() {
       totalTokens: 0,
       totalCost: 0,
       answerVersion: 0,
+      sessionId: '—',
+      turnId: 0,
+      totalTokensPrompt: 0,
+      totalTokensCompletion: 0,
+      citationsCount: 0,
+      llmCallsThisTurn: 0,
+      sessionStartTime: Date.now(),
+    });
+    setTelemetryData({
+      controllerLatencies: [],
+      retrievalLatencies: [],
+      earlyRetrievals: 0,
+      totalChunks: 0,
+      fabricatedIds: 0,
+      traceCoverage: 1.0,
     });
   };
 
@@ -364,39 +418,21 @@ export default function App() {
           </div>
         </div>
 
-        {/* Right Pane: Telemetry */}
+        {/* Right Pane: Metrics & Telemetry */}
         <div className="pane">
           <div className="pane-header">
-            <span className="pane-title">Telemetry</span>
+            <span className="pane-title">Metrics & Telemetry</span>
             <span className="pane-badge" style={{background:'rgba(6,182,212,0.12)', color:'var(--accent-cyan)'}}>
               {stats.telemetryEventCount} events
             </span>
           </div>
-          <div className="pane-body">
-            <div className="telemetry-card">
-              <div className="telemetry-card-title">Pipeline Statistics</div>
-              <div className="stat-grid">
-                <div className="stat-item">
-                  <div className="stat-value green">{stats.retrievalCount}</div>
-                  <div className="stat-label">Retrievals</div>
-                </div>
-                <div className="stat-item">
-                  <div className="stat-value indigo">{stats.intentCount}</div>
-                  <div className="stat-label">Sub-Intents</div>
-                </div>
-                <div className="stat-item">
-                  <div className="stat-value cyan">{stats.claimCount}</div>
-                  <div className="stat-label">Claims</div>
-                </div>
-                <div className="stat-item">
-                  <div className="stat-value amber">{avgLatency} ms</div>
-                  <div className="stat-label">Avg Latency</div>
-                </div>
+          <div className="pane-body" style={{padding: 0}}>
+            <MetricsPanel telemetryData={telemetryData} sessionStats={stats} />
+            {/* Retrieval Gantt - Kept in main UI for quick visibility */}
+            <div style={{padding: '16px', borderBottom: '1px solid var(--border-glass)'}}>
+              <div style={{fontSize:'11px', fontWeight:600, color:'var(--text-secondary)', marginBottom:'10px', textTransform:'uppercase', letterSpacing:'0.5px'}}>
+                ⏱️ RETRIEVAL TIMELINE
               </div>
-            </div>
-
-            <div className="telemetry-card">
-              <div className="telemetry-card-title">Retrieval Timeline</div>
               <div>
                 {retrievals.length === 0 ? (
                   <div style={{fontSize:'11px', color:'var(--text-dim)'}}>No retrievals yet</div>
@@ -417,52 +453,6 @@ export default function App() {
                     );
                   });
                 })()}
-              </div>
-            </div>
-
-            <div className="telemetry-card">
-              <div className="telemetry-card-title">Gate Readouts</div>
-              <div className="gate-readout">
-                <span className="gate-label">G2 Early Retrieval</span>
-                <span className={`gate-value ${stats.retrievalCount > 0 ? 'gate-pass' : 'gate-pending'}`}>
-                  {stats.retrievalCount > 0 ? '✓ PASS' : '—'}
-                </span>
-              </div>
-              <div className="gate-readout">
-                <span className="gate-label">G3 Intent Decomp.</span>
-                <span className={`gate-value ${stats.intentCount > 0 ? 'gate-pass' : 'gate-pending'}`}>
-                  {stats.intentCount > 0 ? `✓ ${stats.intentCount} intents` : '—'}
-                </span>
-              </div>
-              <div className="gate-readout">
-                <span className="gate-label">G4 Citation Support</span>
-                <span className={`gate-value ${citations.length > 0 ? 'gate-pass' : 'gate-pending'}`}>
-                  {citations.length > 0 ? `✓ ${citations.length} cited` : '—'}
-                </span>
-              </div>
-              <div className="gate-readout">
-                <span className="gate-label">G5 Session State</span>
-                <span className={`gate-value ${stats.answerVersion >= 1 ? 'gate-pass' : 'gate-pending'}`}>
-                  {stats.answerVersion > 1 ? '✓ Delta' : stats.answerVersion === 1 ? '✓ V1' : '—'}
-                </span>
-              </div>
-              <div className="gate-readout">
-                <span className="gate-label">Fabricated IDs</span>
-                <span className="gate-value gate-pass">0</span>
-              </div>
-            </div>
-
-            <div className="telemetry-card">
-              <div className="telemetry-card-title">Cost & Tokens</div>
-              <div className="stat-grid">
-                <div className="stat-item">
-                  <div className="stat-value">{stats.totalTokens}</div>
-                  <div className="stat-label">Total Tokens</div>
-                </div>
-                <div className="stat-item">
-                  <div className="stat-value green">${stats.totalCost.toFixed(2)}</div>
-                  <div className="stat-label">Cost (USD)</div>
-                </div>
               </div>
             </div>
           </div>
