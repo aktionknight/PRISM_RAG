@@ -76,6 +76,7 @@ def bake_spacy(*, check_only: bool, package: str = "en_core_web_sm") -> None:
 
             download(package)
             nlp = spacy.load(package)
+        path.parent.mkdir(parents=True, exist_ok=True)
         nlp.to_disk(path)
     ents = [(e.text, e.label_) for e in spacy.load(str(path))("Marriott holds up to 40 people.").ents]
     print(f"ok: {path} -> {ents}")
