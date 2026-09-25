@@ -94,12 +94,20 @@ def create_app() -> FastAPI:
     # -- Frontend UI --
     @app.get("/", response_class=HTMLResponse)
     async def serve_ui():
-        index = _UI_DIR / "index.html"
+        index = _UI_DIR / "dist" / "index.html"
         if index.exists():
             return FileResponse(index)
-        return HTMLResponse("<h1>SLRAG Engine Running</h1><p>Frontend not found in ui/</p>")
+        # Fallback to the old one if dist doesn't exist
+        old_index = _UI_DIR / "index.html"
+        if old_index.exists():
+            return FileResponse(old_index)
+        return HTMLResponse("<h1>SLRAG Engine Running</h1><p>Frontend not found in ui/dist/</p>")
 
-    # Serve static assets from ui/
+    # Serve static assets
+    dist_assets = _UI_DIR / "dist" / "assets"
+    if dist_assets.exists():
+        app.mount("/assets", StaticFiles(directory=str(dist_assets)), name="assets")
+    
     if _UI_DIR.exists():
         app.mount("/ui", StaticFiles(directory=str(_UI_DIR)), name="ui")
 
