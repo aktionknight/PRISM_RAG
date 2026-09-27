@@ -7,7 +7,9 @@ src/slrag.egg-info/entry_points.txt
 src/slrag.egg-info/requires.txt
 src/slrag.egg-info/top_level.txt
 src/slrag/api/__init__.py
+src/slrag/api/app.py
 src/slrag/api/cli.py
+src/slrag/api/ws_server.py
 src/slrag/baseline/__init__.py
 src/slrag/baseline/batch_rag.py
 src/slrag/controller/__init__.py
@@ -66,6 +68,10 @@ src/slrag/synth/types.py
 src/slrag/synth/uncertainty.py
 src/slrag/synth/verifier.py
 src/slrag/telemetry/__init__.py
+src/slrag/telemetry/bus.py
+src/slrag/telemetry/cost.py
+src/slrag/telemetry/jsonl_sink.py
+src/slrag/telemetry/metrics.py
 tests/test_cascade.py
 tests/test_content_floor.py
 tests/test_core.py

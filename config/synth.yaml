@@ -16,7 +16,7 @@ text:
 # Generator (synth/generator.py) — the single synthesis LLM call per turn (HC-5)
 # ---------------------------------------------------------------------------
 generator:
-  backend: extractive                 # extractive | openai_compatible
+  backend: openai_compatible                 # extractive | openai_compatible
   prompts_dir: config/prompts         # relative to repo root
   templates:
     synthesize: synthesize.jinja      # NEW_INTENT turns

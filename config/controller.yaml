@@ -3,8 +3,8 @@
 # Calibrated via Phase 2 sweep (early-trigger-rate vs false-trigger-rate curve, knee selected).
 
 # Stage 2 — BM25 Corpus Discriminativeness Probe
-tau_hi: 0.35          # margin above this → RETRIEVE (corpus is discriminative)
-tau_lo: 0.10          # margin below this → WAIT (corpus is ambiguous)
+tau_hi: 0.15          # margin above this → RETRIEVE (corpus is discriminative)
+tau_lo: 0.05          # margin below this → WAIT (corpus is ambiguous)
 h_lo: 0.65            # normalised entropy below this → peaked distribution
 top_k_probe: 10       # number of top BM25 results to analyse
 margin_top_n: 5       # number of top scores for margin denominator (s2..sN)
@@ -14,7 +14,7 @@ epsilon: 0.15         # drift below this → intent has stabilised
 content_anchor_min: 2 # minimum content anchors required for stability trigger
 
 # Cascade — Refractory Period
-refractory_ms: 250.0  # cooldown between consecutive RETRIEVE decisions (ms)
+refractory_ms: 100.0  # cooldown between consecutive RETRIEVE decisions (ms)
 
 # Speculation Manager
 speculation_drift_delta: 0.30  # embedding drift above this → cancel speculative branch

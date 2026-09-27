@@ -149,27 +149,35 @@ class Decomposer:
         while i < len(doc):
             token = doc[i]
 
+            # Only split if the conjunction's head is a verb/aux (i.e. conjoining clauses),
+            # to avoid incorrectly splitting noun phrases.
+            is_clause_conj = token.head.pos_ in {"VERB", "AUX"}
+
             # Handle multi-token "as well as"
             if token.text.lower() == "as" and i + 2 < len(doc):
                 if (
                     doc[i + 1].text.lower() == "well"
                     and doc[i + 2].text.lower() == "as"
                 ):
-                    if current_chunk:
+                    if is_clause_conj and current_chunk:
                         candidates.append(
                             " ".join(t.text for t in current_chunk)
                         )
                         current_chunk = []
+                    else:
+                        current_chunk.extend([doc[i], doc[i + 1], doc[i + 2]])
                     i += 3
                     continue
 
             # Split on coordinating conjunctions
             if token.lemma_.lower() in split_lemmas and token.dep_ == "cc":
-                if current_chunk:
+                if is_clause_conj and current_chunk:
                     candidates.append(
                         " ".join(t.text for t in current_chunk)
                     )
                     current_chunk = []
+                else:
+                    current_chunk.append(token)
             else:
                 current_chunk.append(token)
 
@@ -217,7 +225,7 @@ class Decomposer:
                 async with session.post(
                     self.llm_url,
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=8.0),
+                    timeout=aiohttp.ClientTimeout(total=60.0),
                 ) as response:
                     if response.status == 200:
                         data = await response.json()

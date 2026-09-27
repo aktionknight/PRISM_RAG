@@ -30,11 +30,13 @@ def evaluate_suppression(prefix: str, t_s: float) -> Optional[ControllerDecision
         for pattern in config.get("anaphora_patterns", [])
     )
     
+    is_question = '?' in prefix_lower
+    
     # Simple rule: if we have presentation verbs or anaphora, we suppress.
     # In a real system, we'd also run NER to ensure ZERO new content entities,
     # but we'll do a simple regex check here for the stub.
     
-    if has_presentation or has_anaphora:
+    if has_presentation or (has_anaphora and not is_question):
         return ControllerDecision(
             t_s=t_s,
             decision="NO_RETRIEVAL",
