@@ -3,6 +3,7 @@ from typing import Optional
 
 from slrag.core.schemas import ControllerDecision
 from slrag.core.config import get_controller_config
+from slrag.controller.content_floor import count_content_anchors
 
 
 def evaluate_suppression(prefix: str, t_s: float) -> Optional[ControllerDecision]:
@@ -32,11 +33,12 @@ def evaluate_suppression(prefix: str, t_s: float) -> Optional[ControllerDecision
     
     is_question = '?' in prefix_lower
     
-    # Simple rule: if we have presentation verbs or anaphora, we suppress.
-    # In a real system, we'd also run NER to ensure ZERO new content entities,
-    # but we'll do a simple regex check here for the stub.
+    # Simple rule: if we have presentation verbs or anaphora, we suppress,
+    # BUT only if there are NO new content anchors in the prefix.
     
-    if has_presentation or (has_anaphora and not is_question):
+    anchors = count_content_anchors(prefix)
+    
+    if (has_presentation or (has_anaphora and not is_question)) and anchors == 0:
         return ControllerDecision(
             t_s=t_s,
             decision="NO_RETRIEVAL",

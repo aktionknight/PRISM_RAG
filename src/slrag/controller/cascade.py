@@ -50,6 +50,18 @@ class RetrievalController:
              
         process_speculation(chunk.text, drift, self.session)
 
+        # --- Utterance End Safety ---
+        if chunk.is_final:
+             self.session.last_retrieve_time = t_s * 1000
+             self.session.current_prefix = ""
+             return ControllerDecision(
+                 t_s=t_s,
+                 decision="RETRIEVE",
+                 reason="utterance_end_safety",
+                 confidence=1.0,
+                 stage=None
+             )
+
         # --- Refractory Period Check ---
         current_time_ms = t_s * 1000
         refractory_ms = config.get("refractory_ms", 250.0)
