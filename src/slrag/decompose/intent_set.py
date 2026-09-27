@@ -95,6 +95,13 @@ class IntentSet:
                         sim = self._compute_similarity(candidate_emb, existing_emb)
 
                         if sim > self.similarity_threshold:
+                            import re
+                            cand_nums = set(re.findall(r'\d+', candidate.search_string))
+                            exist_nums = set(re.findall(r'\d+', existing_intent.search_string))
+                            if cand_nums != exist_nums:
+                                logger.info(f"Skipping dedup for changed numbers: {cand_nums} vs {exist_nums}")
+                                continue
+
                             is_duplicate = True
                             logger.info(
                                 f"Intent deduplicated (sim={sim:.3f}): "

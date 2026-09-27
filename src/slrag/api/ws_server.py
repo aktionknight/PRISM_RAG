@@ -335,12 +335,9 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
                 trigger = "multi_intent"
 
             retrieval_event = {
-                "event_id": _make_event_id(),
                 "timestamp_s": t_s,
                 "query": intent.search_string,
                 "trigger": trigger,
-                "facet": intent.facet,
-                "sub_intent_id": intent.intent_id,
             }
             session.retrieval_events.append(retrieval_event)
 
