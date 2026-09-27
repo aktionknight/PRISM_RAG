@@ -160,12 +160,6 @@ class SessionManager:
         session = self.sessions.pop(session_id, None)
         if session:
             session.state.destroy()
-            # Reset stub global state so Demo→Reset→Demo works correctly
-            try:
-                from slrag.stubs.fake_controller import reset_stub as reset_ctrl
-                reset_ctrl()
-            except Exception:
-                pass
             return True
         return False
 
@@ -218,24 +212,15 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
 
     # ── Stage 1: Controller Decision ──
     started = time.perf_counter()
-    try:
-        from slrag.controller.cascade import RetrievalController
-        from slrag.core.config import get_controller_config
+    from slrag.controller.cascade import RetrievalController
+    from slrag.core.config import get_controller_config
 
-        controller = RetrievalController(session=session.state.controller)
-        decision_result = controller.process_chunk(chunk)
-        decision = decision_result.decision
-        reason = decision_result.reason
-        confidence = decision_result.confidence
-        stage = getattr(decision_result, 'stage', None)
-    except Exception as e:
-        logger.warning(f"Real controller failed ({e}), using stub")
-        from slrag.stubs.fake_controller import fake_controller
-        decision_result = fake_controller(chunk)
-        decision = decision_result.decision
-        reason = decision_result.reason
-        confidence = decision_result.confidence
-        stage = getattr(decision_result, 'stage', None)
+    controller = RetrievalController(session=session.state.controller)
+    decision_result = controller.process_chunk(chunk)
+    decision = decision_result.decision
+    reason = decision_result.reason
+    confidence = decision_result.confidence
+    stage = getattr(decision_result, 'stage', None)
 
     latency_ms = (time.perf_counter() - started) * 1000
 
@@ -292,16 +277,11 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
         ))
 
         # Decompose the FULL prefix (not just the chunk — 02_SOLUTION_DESIGN §C2)
-        try:
-            all_candidates = await session.decomposer.decompose(
-                prefix=session.prefix,
-                existing_intents=session.state.intent_set,
-                ts=t_s,
-            )
-        except Exception as e:
-            logger.warning(f"Real decomposer failed ({e}), using stub")
-            from slrag.stubs.fake_decomposer import fake_decompose
-            all_candidates = fake_decompose(session.prefix, session.state.intent_set)
+        all_candidates = await session.decomposer.decompose(
+            prefix=session.prefix,
+            existing_intents=session.state.intent_set,
+            ts=t_s,
+        )
 
         # Diff against IntentSet — dispatch ONLY genuinely novel intents (S-2)
         try:
@@ -452,88 +432,62 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
 
     # ── Stage 3: Synthesis ──
     synthesis_telemetry = {}
-    try:
-        from slrag.synth.engine import SynthesisEngine, TurnInput
+    from slrag.synth.engine import SynthesisEngine, TurnInput
 
-        engine = SynthesisEngine(session.session_id)
-        turn = TurnInput(
-            turn_id=session.turn_id,
-            utterance=session.prefix,
-            t_s_end=t_s,
-            sub_intents=tuple(
-                SubIntent(
-                    intent_id=f"i{idx}",
-                    facet=q.split()[0] if q else "general",
-                    query_nl=q,
-                    search_string=q,
-                )
-                for idx, q in enumerate(session.sub_queries)
-            ),
-            retrieval_events=tuple(session.retrieval_events),
-        )
+    engine = SynthesisEngine(session.session_id)
+    turn = TurnInput(
+        turn_id=session.turn_id,
+        utterance=session.prefix,
+        t_s_end=t_s,
+        sub_intents=tuple(
+            SubIntent(
+                intent_id=f"i{idx}",
+                facet=q.split()[0] if q else "general",
+                query_nl=q,
+                search_string=q,
+            )
+            for idx, q in enumerate(session.sub_queries)
+        ),
+        retrieval_events=tuple(session.retrieval_events),
+    )
 
-        # Stream results
-        async for event in engine.stream_turn(turn):
-            from slrag.synth.types import StreamEvent
-            from slrag.synth.engine import SynthesisResult
+    # Stream results
+    async for event in engine.stream_turn(turn):
+        from slrag.synth.types import StreamEvent
+        from slrag.synth.engine import SynthesisResult
 
-            if isinstance(event, StreamEvent):
-                await ws.send_json({
-                    "type": "answer_token",
-                    "kind": event.kind,
-                    "seq": event.seq,
-                    "text": event.text,
-                    "citations": event.citations,
-                    "facet": event.facet,
-                })
-            elif isinstance(event, SynthesisResult):
-                session.answer = event.output.answer
-                session.citations = event.output.citations
-                session.uncertainty = event.output.uncertainty
-                session.claims = [c.model_dump() for c in event.output.claims]
+        if isinstance(event, StreamEvent):
+            await ws.send_json({
+                "type": "answer_token",
+                "kind": event.kind,
+                "seq": event.seq,
+                "text": event.text,
+                "citations": event.citations,
+                "facet": event.facet,
+            })
+        elif isinstance(event, SynthesisResult):
+            session.answer = event.output.answer
+            session.citations = event.output.citations
+            session.uncertainty = event.output.uncertainty
+            session.claims = [c.model_dump() for c in event.output.claims]
 
-                # Extract telemetry from synthesis result
-                if event.output.telemetry:
-                    tel = event.output.telemetry
-                    synthesis_telemetry = {
-                        "latency_ms": tel.latency_ms,
-                        "tokens": tel.tokens,
-                        "cost_usd": tel.cost_usd,
-                    }
-                    # Accumulate session totals
-                    session.total_tokens_prompt += tel.tokens.get("prompt", 0)
-                    session.total_tokens_completion += tel.tokens.get("completion", 0)
-                    session.total_cost_usd += tel.cost_usd
-                    session.total_llm_calls += 1
+            # Extract telemetry from synthesis result
+            if event.output.telemetry:
+                tel = event.output.telemetry
+                synthesis_telemetry = {
+                    "latency_ms": tel.latency_ms,
+                    "tokens": tel.tokens,
+                    "cost_usd": tel.cost_usd,
+                }
+                # Accumulate session totals
+                session.total_tokens_prompt += tel.tokens.get("prompt", 0)
+                session.total_tokens_completion += tel.tokens.get("completion", 0)
+                session.total_cost_usd += tel.cost_usd
+                session.total_llm_calls += 1
 
-                # Emit synthesis telemetry events
-                for te in event.telemetry:
-                    await bus.emit(te)
-
-    except Exception as e:
-        logger.warning(f"Synthesis engine failed ({e}), using stub")
-        from slrag.stubs.fake_synthesis import fake_synthesize
-        output = fake_synthesize(
-            session_id=session.session_id,
-            turn_id=session.turn_id,
-        )
-        session.answer = output.answer
-        session.citations = output.citations
-        session.uncertainty = output.uncertainty
-        session.claims = [c.model_dump() for c in output.claims]
-
-        # Extract stub telemetry
-        if output.telemetry:
-            tel = output.telemetry
-            synthesis_telemetry = {
-                "latency_ms": tel.latency_ms,
-                "tokens": tel.tokens,
-                "cost_usd": tel.cost_usd,
-            }
-            session.total_tokens_prompt += tel.tokens.get("prompt", 0)
-            session.total_tokens_completion += tel.tokens.get("completion", 0)
-            session.total_cost_usd += tel.cost_usd
-            session.total_llm_calls += 1
+            # Emit synthesis telemetry events
+            for te in event.telemetry:
+                await bus.emit(te)
 
     synthesis_latency_ms = (time.perf_counter() - synthesis_start) * 1000
 

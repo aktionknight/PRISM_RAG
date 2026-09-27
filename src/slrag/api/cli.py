@@ -43,7 +43,6 @@ def cmd_replay(args: argparse.Namespace) -> None:
     from slrag.core.schemas import TranscriptChunk
     from slrag.core.session import SessionState
     from slrag.core.orchestrator import Orchestrator
-    from slrag.stubs.fake_synthesis import fake_synthesize
 
     logger.info(
         f"Replay mode: stream={args.stream}, corpus={args.corpus}, out={args.out}"
@@ -69,9 +68,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
                 decision = await orchestrator.process_chunk(chunk)
                 events.append(decision.model_dump())
         
-        # Call synthesis at the end
-        output = fake_synthesize(session_id=session.session_id, turn_id=session.turn_id)
-        events.append(output.model_dump())
+        # Call synthesis at the end (omitted for now since stubs are removed)
         
         out_path = Path(args.out)
         out_path.parent.mkdir(parents=True, exist_ok=True)

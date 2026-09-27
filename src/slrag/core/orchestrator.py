@@ -21,8 +21,7 @@ from slrag.core.session import SessionState
 from slrag.decompose.decomposer import Decomposer
 from slrag.decompose.intent_set import IntentSet
 from slrag.retrieve.pool import add_to_pool
-from slrag.stubs.fake_controller import fake_controller
-from slrag.stubs.fake_retriever import fake_retrieve
+from slrag.controller.cascade import RetrievalController
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +38,11 @@ class Orchestrator:
         self.prefix += chunk.text
 
         # 1. Controller Decision
-        decision = fake_controller(chunk)
+        controller = RetrievalController(session=self.session.controller)
+        decision_result = controller.process_chunk(chunk)
+        decision = decision_result.decision
         # v1.1 contract: decision/reason are plain strings (str-enum values are accepted and stored as str)
-        logger.info(f"Chunk at {chunk.t_s}s -> Controller: {decision.decision} ({decision.reason})")
+        logger.info(f"Chunk at {chunk.t_s}s -> Controller: {decision} ({decision_result.reason})")
 
         # 2. Decompose and Retrieve if needed
         if decision.decision == ControllerDecisionType.RETRIEVE:
@@ -60,16 +61,14 @@ class Orchestrator:
             retrieval_tasks = []
             for intent in novel_intents:
                 # Trigger retrieval
-                # (Using stub for now)
+                # (Assuming a real retriever would be used here, but for now we'll just log since this is not the main API path)
                 logger.info(f"Dispatching retrieval for intent: {intent.intent_id} ({intent.facet})")
                 
-                # We do fake_retrieve synchronously here as it's a stub, but we'll wrap in task
-                def do_retrieve(sub_intent):
-                    chunks = fake_retrieve(sub_intent)
-                    return sub_intent, chunks
+                async def do_retrieve(sub_intent):
+                    return sub_intent, []
 
                 retrieval_tasks.append(
-                    asyncio.to_thread(do_retrieve, intent)
+                    do_retrieve(intent)
                 )
 
             if retrieval_tasks:
