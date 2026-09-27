@@ -88,9 +88,14 @@ class Decomposer:
         self.max_llm_calls: int = self.app_config.get("engine", {}).get(
             "max_llm_calls_per_turn", 3
         )
-        self.facets: list[str] = list(
-            self.facets_config.get("facets", {}).keys()
-        )
+        raw_facets = self.facets_config.get("facets", {})
+        if isinstance(raw_facets, dict):
+            self.facets: list[str] = list(raw_facets.keys())
+        elif isinstance(raw_facets, list):
+            self.facets: list[str] = [f["facet_id"] for f in raw_facets if "facet_id" in f]
+        else:
+            self.facets: list[str] = []
+        
         self.default_facet: str = self.facets_config.get("default_facet", "general")
 
         # Jinja setup for prompt templates (all prompts in config/prompts/)
