@@ -84,6 +84,25 @@ def create_app() -> FastAPI:
     async def health():
         return {"status": "ok", "engine": "slrag"}
 
+    # -- Preload Models --
+    @app.get("/api/preload")
+    async def preload():
+        # Warm up Embedding Model
+        try:
+            from slrag.decompose.intent_set import _get_embedding_model
+            _get_embedding_model("BAAI/bge-small-en-v1.5")
+        except Exception as e:
+            logger.error(f"Embedding load failed: {e}")
+
+        # Warm up SpaCy model
+        try:
+            import spacy
+            spacy.load("en_core_web_sm")
+        except Exception as e:
+            logger.error(f"SpaCy load failed: {e}")
+
+        return {"status": "ok", "message": "Models preloaded"}
+
     # -- API: list sessions --
     @app.get("/api/sessions")
     async def list_sessions():

@@ -21,6 +21,7 @@ function escapeHtml(str) {
 }
 
 export default function App() {
+  const [isPreloading, setIsPreloading] = useState(true);
   const [status, setStatus] = useState(STATUS_CONNECTING);
   const [sessionId, setSessionId] = useState('—');
   const [chunks, setChunks] = useState([]);
@@ -77,14 +78,29 @@ export default function App() {
     }
   }, [streamingTokens, finalAnswer, subQueries, uncertainties]);
 
+  // Preload models before connecting
   useEffect(() => {
+    fetch('/api/preload')
+      .then(res => res.json())
+      .then(data => {
+        console.log('Preload complete:', data);
+        setIsPreloading(false);
+      })
+      .catch(err => {
+        console.error('Preload failed:', err);
+        setIsPreloading(false); // allow app to load anyway
+      });
+  }, []);
+
+  useEffect(() => {
+    if (isPreloading) return;
     connect();
     return () => {
       if (wsRef.current) {
         wsRef.current.close();
       }
     };
-  }, []);
+  }, [isPreloading]);
 
   const connect = () => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -286,6 +302,12 @@ export default function App() {
 
   return (
     <>
+      {isPreloading && (
+        <div className="loading-overlay fade-in">
+          <div className="spinner"></div>
+          <div className="loading-text">Warming up Embedding & NLP Models…</div>
+        </div>
+      )}
       <header className="header">
         <div className="header-left">
           <div>
