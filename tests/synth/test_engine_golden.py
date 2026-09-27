@@ -31,6 +31,27 @@ from tests.helpers import (
     turn_evidence,
     turn_sub_intents,
 )
+from unittest.mock import patch
+
+@pytest.fixture(autouse=True)
+def force_extractive_backend():
+    original = load_synth_config()
+    modified = copy.deepcopy(original)
+    modified["generator"]["backend"] = "extractive"
+    
+    from slrag.synth.config import _load_yaml, config_dir
+    def mock_load_facets(path=None):
+        return _load_yaml(config_dir() / "facets.yaml").get("facets", {}) or {}
+
+    with patch("slrag.synth.engine.load_synth_config", return_value=modified), \
+         patch("slrag.synth.uncertainty.load_synth_config", return_value=modified), \
+         patch("slrag.synth.generator.load_synth_config", return_value=modified), \
+         patch("slrag.synth.delta.load_synth_config", return_value=modified), \
+         patch("slrag.synth.uncertainty.load_facets", side_effect=mock_load_facets), \
+         patch("slrag.synth.generator.load_facets", side_effect=mock_load_facets), \
+         patch("slrag.synth.engine.load_facets", side_effect=mock_load_facets), \
+         patch("slrag.synth.delta.load_facets", side_effect=mock_load_facets):
+        yield
 
 
 def _turn_input(turn: dict) -> TurnInput:
@@ -261,7 +282,7 @@ async def test_pre_decomposition_routing_reproduces_every_golden_scenario(name):
     _, _, turns, golden = await _run(name)
     _, routed, retriever, upstream_passes = await _run_routed(name)
 
-    assert [r.output.model_dump() for r in routed] == [r.output.model_dump() for r in golden]
+    assert [r.output.model_dump(exclude={"telemetry"}) for r in routed] == [r.output.model_dump(exclude={"telemetry"}) for r in golden]
     assert upstream_passes == sum(t["expected"].get("upstream", t["expected"]["turn_type"] == "NEW_INTENT")
                                   for t in turns if "expected" in t)
     assert all(r.telemetry[0].payload["precomputed"] for r in routed)

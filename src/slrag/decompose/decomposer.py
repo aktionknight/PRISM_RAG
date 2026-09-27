@@ -88,9 +88,11 @@ class Decomposer:
         self.max_llm_calls: int = self.app_config.get("engine", {}).get(
             "max_llm_calls_per_turn", 3
         )
-        self.facets: list[str] = list(
-            self.facets_config.get("facets", {}).keys()
-        )
+        facets_val = self.facets_config.get("facets", {})
+        if isinstance(facets_val, list):
+            self.facets: list[str] = [f.get("facet_id", "") for f in facets_val if "facet_id" in f]
+        else:
+            self.facets: list[str] = list(facets_val.keys())
         self.default_facet: str = self.facets_config.get("default_facet", "general")
 
         # Jinja setup for prompt templates (all prompts in config/prompts/)
@@ -200,7 +202,7 @@ class Decomposer:
             return None
 
         payload = {
-            "model": "qwen2.5:7b-instruct",
+            "model": "llama3.2:1b",
             "messages": [
                 {
                     "role": "system",

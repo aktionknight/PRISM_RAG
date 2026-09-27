@@ -460,16 +460,15 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
             turn_id=session.turn_id,
             utterance=session.prefix,
             t_s_end=t_s,
-            sub_intents=tuple(
-                SubIntent(
-                    intent_id=f"i{idx}",
-                    facet=q.split()[0] if q else "general",
-                    query_nl=q,
-                    search_string=q,
-                )
-                for idx, q in enumerate(session.sub_queries)
+            sub_intents=tuple(session.state.intent_set.values()),
+            retrieval_events=tuple(
+                {
+                    "timestamp_s": e["timestamp_s"],
+                    "query": e["query"],
+                    "trigger": e["trigger"]
+                }
+                for e in session.retrieval_events
             ),
-            retrieval_events=tuple(session.retrieval_events),
         )
 
         # Stream results

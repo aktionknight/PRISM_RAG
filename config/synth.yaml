@@ -16,7 +16,7 @@ text:
 # Generator (synth/generator.py) — the single synthesis LLM call per turn (HC-5)
 # ---------------------------------------------------------------------------
 generator:
-  backend: extractive                 # extractive | openai_compatible
+  backend: openai_compatible                 # extractive | openai_compatible
   prompts_dir: config/prompts         # relative to repo root
   templates:
     synthesize: synthesize.jinja      # NEW_INTENT turns
@@ -24,12 +24,12 @@ generator:
     present_only: present_only.jinja  # PRESENTATION_ONLY (optional LLM restyle)
   openai_compatible:                  # Qwen2.5-7B-Instruct via local Ollama/vLLM (HC-1: local only)
     base_url: http://localhost:11434/v1
-    model: qwen2.5:7b-instruct
+    model: llama3.2:1b
     api_key_env: SLRAG_LLM_API_KEY    # optional; local Ollama needs none
     temperature: 0.0
     max_tokens: 700
     timeout_s: 30
-    json_schema_mode: true            # S-6 layer 2: citations constrained to the allowlist enum
+    json_schema_mode: false            # S-6 layer 2: citations constrained to the allowlist enum
     allow_remote: false               # HC-1: refuse non-local endpoints unless explicitly overridden
     stream: true                      # SSE: each claim reaches the verifier as its JSON object closes (W-1)
     stream_usage: true                # ask for token usage in the final stream chunk (stream_options)
