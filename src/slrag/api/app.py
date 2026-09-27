@@ -125,7 +125,7 @@ def create_app() -> FastAPI:
                     "max_tokens": 1
                 }
                 logger.info("Warming up Ollama LLM...")
-                async with session.post("http://localhost:11434/v1/chat/completions", json=payload, timeout=120) as resp:
+                async with session.post("http://127.0.0.1:11434/v1/chat/completions", json=payload, timeout=120) as resp:
                     await resp.json()
                 logger.info("Ollama LLM warmup complete.")
         except Exception as e:

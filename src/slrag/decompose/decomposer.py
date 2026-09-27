@@ -112,8 +112,7 @@ class Decomposer:
             except Exception as e:
                 logger.warning(f"spaCy pipeline unavailable ({e}); syntactic splitting disabled. Run `make setup`.")
 
-        # LLM endpoint (OpenAI-compatible — Ollama/vLLM)
-        self.llm_url = "http://localhost:11434/v1/chat/completions"
+        self.llm_url = "http://127.0.0.1:11434/v1/chat/completions"
 
     # ── Config helpers ──────────────────────────────────────────────
 
