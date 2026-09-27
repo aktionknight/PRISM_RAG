@@ -59,6 +59,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_RETRIEVER = None
+
+def get_retriever():
+    global _RETRIEVER
+    if _RETRIEVER is None:
+        from slrag.retrieve.dense import DenseRetriever
+        from pathlib import Path
+        _RETRIEVER = DenseRetriever(
+            index_path=Path(".index/faiss"),
+            chunks_path=Path(".index/chunks.jsonl")
+        )
+    return _RETRIEVER
+
 # ── Telemetry helpers ────────────────────────────────────────────────
 
 def _make_event_id() -> str:
@@ -341,6 +354,19 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
             }
             session.retrieval_events.append(retrieval_event)
 
+            # Do actual retrieval and add to pool
+            from slrag.retrieve.pool import add_to_pool
+            retriever = get_retriever()
+            retrieved_chunks = await retriever.search(intent.search_string, top_k=10)
+            for chunk in retrieved_chunks:
+                add_to_pool(
+                    session=session.state,
+                    chunk=chunk,
+                    intent_id=intent.intent_id,
+                    ts_stream_s=t_s,
+                    speculative=False
+                )
+
             # Mark intent as dispatched
             session.intent_set.mark_dispatched(intent.intent_id)
 
@@ -432,12 +458,20 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
     from slrag.synth.engine import SynthesisEngine, TurnInput
 
     engine = SynthesisEngine(session.session_id)
+    from slrag.retrieve.pool import get_pool_chunks_for_intent
+
+    turn_evidence = {
+        intent.intent_id: get_pool_chunks_for_intent(session.state, intent.intent_id, top_k=10)
+        for intent in session.state.intent_set.values()
+    }
+
     turn = TurnInput(
         turn_id=session.turn_id,
         utterance=session.prefix,
         t_s_end=t_s,
         sub_intents=tuple(session.state.intent_set.values()),
         retrieval_events=tuple(session.retrieval_events),
+        evidence=turn_evidence,
     )
 
     # Stream results
