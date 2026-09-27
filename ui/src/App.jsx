@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './index.css';
 import MetricsPanel from './components/MetricsPanel';
+import { Icon } from './components/Icons';
 
 const STATUS_CONNECTED = 'Connected';
 const STATUS_DISCONNECTED = 'Disconnected';
@@ -9,7 +10,7 @@ const STATUS_CONNECTING = 'Connecting…';
 
 function escapeHtml(str) {
   if (!str) return '';
-  return str.replace(/[&<>'"]/g, 
+  return str.replace(/[&<>'"]/g,
     tag => ({
       '&': '&amp;',
       '<': '&lt;',
@@ -31,7 +32,7 @@ export default function App() {
   const [finalAnswer, setFinalAnswer] = useState(null);
   const [citations, setCitations] = useState([]);
   const [uncertainties, setUncertainties] = useState([]);
-  
+
   const [stats, setStats] = useState({
     retrievalCount: 0,
     intentCount: 0,
@@ -61,7 +62,7 @@ export default function App() {
 
   const [inputVal, setInputVal] = useState('');
   const wsRef = useRef(null);
-  
+
   const streamPaneRef = useRef(null);
   const answerPaneRef = useRef(null);
 
@@ -253,9 +254,9 @@ export default function App() {
   const sendQuery = () => {
     const text = inputVal.trim();
     if (!text || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-    
+
     setInputVal('');
-    
+
     // Simulate streaming chunks
     const words = text.split(/\s+/);
     const chunkSize = Math.max(3, Math.ceil(words.length / 4));
@@ -296,8 +297,8 @@ export default function App() {
   };
 
   // Derived stats
-  const avgLatency = stats.latencies.length > 0 
-    ? (stats.latencies.reduce((a,b)=>a+b,0) / stats.latencies.length).toFixed(1) 
+  const avgLatency = stats.latencies.length > 0
+    ? (stats.latencies.reduce((a,b)=>a+b,0) / stats.latencies.length).toFixed(1)
     : '—';
 
   return (
@@ -305,7 +306,7 @@ export default function App() {
       {isPreloading && (
         <div className="loading-overlay fade-in">
           <div className="spinner"></div>
-          <div className="loading-text">Warming up Embedding & NLP Models…</div>
+          <div className="loading-text">Warming up Embedding &amp; NLP Models…</div>
         </div>
       )}
       <header className="header">
@@ -326,15 +327,13 @@ export default function App() {
         {/* Left Pane: Live Stream */}
         <div className="pane">
           <div className="pane-header">
-            <span className="pane-title">Live Stream</span>
-            <span className="pane-badge" style={{background:'rgba(99,102,241,0.12)', color:'var(--accent-indigo)'}}>
-              {chunks.length} chunks
-            </span>
+            <span className="pane-title"><Icon name="signal" size={14} /> Live Stream</span>
+            <span className="pane-badge">{chunks.length} chunks</span>
           </div>
           <div className="pane-body" ref={streamPaneRef}>
             {chunks.length === 0 ? (
               <div className="empty-state">
-                <div className="empty-state-icon">📡</div>
+                <div className="empty-state-icon"><Icon name="signal" size={20} strokeWidth={1.5} /></div>
                 <div className="empty-state-text">Waiting for transcript chunks…</div>
               </div>
             ) : (
@@ -342,8 +341,9 @@ export default function App() {
                 const decision = msg.decision;
                 let badgeClass = 'badge-wait';
                 let badgeText = 'WAIT';
-                if (decision === 'RETRIEVE') { badgeClass = 'badge-retrieve'; badgeText = '⚡ RETRIEVE'; }
-                else if (decision === 'NO_RETRIEVAL') { badgeClass = 'badge-suppress'; badgeText = '🛑 SUPPRESS'; }
+                let badgeIcon = null;
+                if (decision === 'RETRIEVE') { badgeClass = 'badge-retrieve'; badgeText = 'RETRIEVE'; badgeIcon = 'bolt'; }
+                else if (decision === 'NO_RETRIEVAL') { badgeClass = 'badge-suppress'; badgeText = 'SUPPRESS'; badgeIcon = 'stop'; }
 
                 const conf = msg.confidence || 0;
                 const confPct = Math.round(conf * 100);
@@ -354,8 +354,11 @@ export default function App() {
                     <div className="chunk-time">{(msg.t_s || 0).toFixed(1)}s</div>
                     <div className="chunk-content">
                       <div className="chunk-text">{msg.prefix || ''}</div>
-                      <span className={`chunk-badge ${badgeClass}`}>{badgeText}</span>
-                      <span style={{fontSize:'10px', color:'var(--text-dim)', marginLeft:'6px'}}>{msg.reason || ''}</span>
+                      <span className={`chunk-badge ${badgeClass}`}>
+                        {badgeIcon && <Icon name={badgeIcon} size={10} strokeWidth={2.5} />}
+                        {badgeText}
+                      </span>
+                      <span className="chunk-reason">{msg.reason || ''}</span>
                       <span className="confidence-bar">
                         <span className="confidence-fill" style={{width: `${confPct}%`, background: confColor}}></span>
                       </span>
@@ -370,17 +373,13 @@ export default function App() {
         {/* Center Pane: Answer */}
         <div className="pane">
           <div className="pane-header">
-            <span className="pane-title">Answer</span>
-            <div style={{display:'flex', gap:'8px', alignItems:'center'}}>
-              <span className="pane-badge" style={{background:'rgba(16,185,129,0.12)', color:'var(--accent-emerald)'}}>
-                V{stats.answerVersion}
-              </span>
-            </div>
+            <span className="pane-title"><Icon name="message" size={14} /> Answer</span>
+            <span className="pane-badge">V{stats.answerVersion}</span>
           </div>
           <div className="pane-body" ref={answerPaneRef}>
             {chunks.length === 0 && !finalAnswer && streamingTokens.length === 0 && subQueries.length === 0 ? (
               <div className="empty-state">
-                <div className="empty-state-icon">💬</div>
+                <div className="empty-state-icon"><Icon name="message" size={20} strokeWidth={1.5} /></div>
                 <div className="empty-state-text">Ask a question to see the grounded answer</div>
               </div>
             ) : (
@@ -392,7 +391,7 @@ export default function App() {
                     ))}
                   </div>
                 )}
-                
+
                 {finalAnswer && (
                   <div className="version-info">
                     <span className="version-badge">V{finalAnswer.version}</span>
@@ -404,7 +403,7 @@ export default function App() {
 
                 {finalAnswer ? (
                   <div className="answer-section fade-in">
-                    <div 
+                    <div
                       className="answer-sentence committed"
                       dangerouslySetInnerHTML={{
                         __html: escapeHtml(finalAnswer.answer).replace(/\[(Doc_\d+\s*§\w+)\]/g, '<span class="citation-chip">$1</span>')
@@ -414,7 +413,7 @@ export default function App() {
                 ) : (
                   streamingTokens.map((t, i) => (
                     <div key={i} className={`answer-sentence ${t.kind || 'provisional'} fade-in`}>
-                      {t.text || ''} 
+                      {t.text || ''}
                       {(t.citations || []).map((c, j) => (
                         <span key={j} className="citation-chip" title={c}>{c}</span>
                       ))}
@@ -423,7 +422,7 @@ export default function App() {
                 )}
 
                 {citations.length > 0 && finalAnswer && (
-                  <div style={{display:'flex', flexWrap:'wrap', gap:'6px', marginTop:'12px'}}>
+                  <div className="citation-row">
                     {citations.map((c, i) => (
                       <span key={i} className="citation-chip">{c}</span>
                     ))}
@@ -432,7 +431,8 @@ export default function App() {
 
                 {uncertainties.map((u, i) => (
                   <div key={i} className="uncertainty-box fade-in">
-                    {u}
+                    <span className="uncertainty-icon"><Icon name="warning" size={13} /></span>
+                    <span>{u}</span>
                   </div>
                 ))}
               </>
@@ -443,21 +443,19 @@ export default function App() {
         {/* Right Pane: Metrics & Telemetry */}
         <div className="pane">
           <div className="pane-header">
-            <span className="pane-title">Metrics & Telemetry</span>
-            <span className="pane-badge" style={{background:'rgba(6,182,212,0.12)', color:'var(--accent-cyan)'}}>
-              {stats.telemetryEventCount} events
-            </span>
+            <span className="pane-title"><Icon name="gauge" size={14} /> Metrics &amp; Telemetry</span>
+            <span className="pane-badge">{stats.telemetryEventCount} events</span>
           </div>
           <div className="pane-body" style={{padding: 0}}>
             <MetricsPanel telemetryData={telemetryData} sessionStats={stats} />
             {/* Retrieval Gantt - Kept in main UI for quick visibility */}
-            <div style={{padding: '16px', borderBottom: '1px solid var(--border-glass)'}}>
-              <div style={{fontSize:'11px', fontWeight:600, color:'var(--text-secondary)', marginBottom:'10px', textTransform:'uppercase', letterSpacing:'0.5px'}}>
-                ⏱️ RETRIEVAL TIMELINE
+            <div className="timeline-section">
+              <div className="telemetry-card-title">
+                <Icon name="clock" size={12} /> Retrieval Timeline
               </div>
               <div>
                 {retrievals.length === 0 ? (
-                  <div style={{fontSize:'11px', color:'var(--text-dim)'}}>No retrievals yet</div>
+                  <div className="timeline-empty">No retrievals yet</div>
                 ) : (() => {
                   const maxTs = Math.max(...retrievals.map(e => e.timestamp_s || 0), 1);
                   return retrievals.map((ev, idx) => {
@@ -470,7 +468,7 @@ export default function App() {
                         <div className="gantt-track">
                           <div className={`gantt-fill ${isSpec ? 'speculative' : 'confirmed'}`} style={{left:`${left}%`, width:`${width}%`}}></div>
                         </div>
-                        <span style={{fontSize:'10px', color:'var(--text-dim)'}}>{(ev.timestamp_s || 0).toFixed(1)}s</span>
+                        <span className="gantt-time">{(ev.timestamp_s || 0).toFixed(1)}s</span>
                       </div>
                     );
                   });
@@ -482,20 +480,26 @@ export default function App() {
       </main>
 
       <div className="input-bar">
-        <input 
-          className="input-field" 
-          type="text" 
-          placeholder="Type your query here… (streamed as chunks)" 
+        <input
+          className="input-field"
+          type="text"
+          placeholder="Type your query here… (streamed as chunks)"
           value={inputVal}
           onChange={e => setInputVal(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && sendQuery()}
         />
         <button id="sendBtn" className="btn btn-primary" onClick={sendQuery}>
-          <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          <Icon name="send" size={14} />
           Send
         </button>
-        <button className="btn btn-demo" onClick={runDemo}>▶ Demo</button>
-        <button className="btn btn-secondary" onClick={resetSession}>↻ Reset</button>
+        <button className="btn btn-demo" onClick={runDemo}>
+          <Icon name="play" size={12} />
+          Demo
+        </button>
+        <button className="btn btn-secondary" onClick={resetSession}>
+          <Icon name="reset" size={14} />
+          Reset
+        </button>
       </div>
     </>
   );

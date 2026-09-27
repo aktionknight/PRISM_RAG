@@ -101,6 +101,36 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.error(f"SpaCy load failed: {e}")
 
+        # Warm up CrossEncoder NLI Scorer (if configured)
+        try:
+            from slrag.synth.verifier import get_entailment_scorer
+            get_entailment_scorer()
+        except Exception as e:
+            logger.error(f"CrossEncoder NLI load failed: {e}")
+
+        # Warm up Reranker (if used)
+        try:
+            from slrag.retrieve.rerank import Reranker
+            Reranker()
+        except Exception as e:
+            logger.error(f"Reranker load failed: {e}")
+
+        # Warm up Ollama LLM (this usually takes ~1 min for the first query)
+        try:
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    "model": "qwen2.5:7b-instruct",
+                    "messages": [{"role": "user", "content": "warmup"}],
+                    "max_tokens": 1
+                }
+                logger.info("Warming up Ollama LLM...")
+                async with session.post("http://localhost:11434/v1/chat/completions", json=payload, timeout=120) as resp:
+                    await resp.json()
+                logger.info("Ollama LLM warmup complete.")
+        except Exception as e:
+            logger.error(f"Ollama load failed: {e}")
+
         return {"status": "ok", "message": "Models preloaded"}
 
     # -- API: list sessions --
