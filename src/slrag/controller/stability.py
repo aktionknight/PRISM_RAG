@@ -52,16 +52,26 @@ def evaluate_stability(prefix: str, t_s: float, session: ControllerState, encode
         sim = cosine_similarity(current_emb, session.last_embedding)
         drift = 1.0 - sim
         
-        anchors = count_content_anchors(prefix)
+        # Guard: Check if there is an unclosed self-correction in the active trailing clause
+        # e.g. "... actually no, dont list the models just tell"
+        markers = config.get("self_correction_markers", [])
+        last_punct = max(prefix.rfind('.'), prefix.rfind('?'), prefix.rfind('!'))
+        current_clause = prefix[last_punct + 1:].lower() if last_punct != -1 else prefix.lower()
+        has_unclosed_correction = any(m in current_clause for m in markers)
         
-        if drift < epsilon and anchors >= min_anchors:
+        anchors = count_content_anchors(prefix)
+        if not has_unclosed_correction and drift < epsilon and anchors >= min_anchors:
             # Update session state before returning
             session.last_embedding = current_emb
             return ControllerDecision(
                 t_s=t_s,
                 decision="RETRIEVE",
                 reason="intent_stabilised",
-                confidence=0.8
+                confidence=0.85,
+                stage=3,
+                stage_name="Stage 3: Embedding Stability",
+                margin=round(float(drift), 4),
+                threshold=round(float(epsilon), 4),
             )
             
     # Always update the session with the latest embedding
