@@ -131,10 +131,100 @@ class HybridIndexer:
                 }
                 f.write(json.dumps(record) + "\n")
 
+        # ── 5. Probe Threshold Calibration (Index-Time Per-Corpus Tuning) ──
+        logger.info("Calibrating probe thresholds from corpus prefix margin distribution...")
+        self.calibrate_probe_thresholds(chunks, bm25_retriever)
+
         logger.info(
             f"Indexing complete: {len(chunks)} chunks, "
             f"sparse={self.sparse_path}, dense={self.dense_path}"
         )
+
+    def calibrate_probe_thresholds(self, chunks: list[ChunkRecord], bm25_retriever: Any) -> dict[str, float]:
+        """Calibrate tau_hi and tau_lo per corpus at index time.
+        
+        Samples prefixes from the corpus's own chunks, queries BM25 to compute
+        empirical margin and entropy distributions, and sets tau_hi (75th percentile)
+        and tau_lo (25th percentile).
+        """
+        import re
+        import numpy as np
+        import bm25s
+
+        sampled_prefixes: list[str] = []
+        for chunk in chunks:
+            text = chunk.text.strip()
+            if not text:
+                continue
+            lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+            for line in lines:
+                clean = re.sub(r'[*_#`\[\]]', '', line).strip()
+                words = clean.split()
+                if len(words) >= 4:
+                    sampled_prefixes.append(" ".join(words[:min(5, len(words))]))
+                if len(words) >= 8:
+                    sampled_prefixes.append(" ".join(words[:min(9, len(words))]))
+                if 4 <= len(words) <= 15:
+                    sampled_prefixes.append(clean)
+            if len(sampled_prefixes) >= 120:
+                break
+
+        sampled_prefixes = list(dict.fromkeys(sampled_prefixes))
+        margins: list[float] = []
+        entropies: list[float] = []
+
+        if sampled_prefixes:
+            for pref in sampled_prefixes:
+                try:
+                    q_tokens = bm25s.tokenize([pref], show_progress=False)
+                    docs, scores = bm25_retriever.retrieve(q_tokens, k=10, show_progress=False)
+                    s = scores[0]
+                    if len(s) > 0 and s[0] > 0:
+                        s1 = float(s[0])
+                        s_rest = s[1:5]
+                        mean_rest = float(np.mean(s_rest)) if len(s_rest) > 0 else 0.0
+                        margin = (s1 - mean_rest) / s1 if s1 > 0 else 0.0
+                        margins.append(margin)
+
+                        total = float(np.sum(s))
+                        if total > 0:
+                            p = s / total
+                            p = p[p > 0]
+                            h_raw = -float(np.sum(p * np.log(p)))
+                            h_norm = h_raw / float(np.log(len(s))) if len(s) > 1 else 0.0
+                            entropies.append(h_norm)
+                except Exception as e:
+                    logger.debug(f"Prefix calibration probe skipped '{pref}': {e}")
+
+        if len(margins) >= 5:
+            tau_hi = float(np.percentile(margins, 75))
+            tau_lo = float(np.percentile(margins, 25))
+            tau_lo = max(0.04, min(tau_lo, 0.25))
+            tau_hi = max(tau_lo + 0.05, min(tau_hi, 0.85))
+            h_lo = float(np.percentile(entropies, 65)) if entropies else 0.65
+            h_lo = max(0.40, min(h_lo, 0.85))
+        else:
+            tau_hi = 0.35
+            tau_lo = 0.10
+            h_lo = 0.65
+
+        calib_data = {
+            "tau_hi": round(tau_hi, 4),
+            "tau_lo": round(tau_lo, 4),
+            "h_lo": round(h_lo, 4),
+            "sample_count": len(margins),
+        }
+
+        calib_file = self.project_root / ".index" / "probe_calibration.json"
+        calib_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(calib_file, "w", encoding="utf-8") as f:
+            json.dump(calib_data, f, indent=2)
+
+        logger.info(
+            f"Calibrated probe thresholds: tau_hi={tau_hi:.4f}, tau_lo={tau_lo:.4f}, "
+            f"h_lo={h_lo:.4f} (from {len(margins)} sampled prefixes saved to {calib_file})"
+        )
+        return calib_data
 
     @classmethod
     def run_pipeline(cls, corpus_dir: Path) -> None:

@@ -212,48 +212,44 @@ def create_app() -> FastAPI:
 
     @app.post("/api/corpus/reset")
     async def reset_corpus():
-        """Reset corpus and session: remove custom documents (keep sample_doc) and clear session state."""
+        """Reset corpus, FAISS index, and all session state completely."""
+        import shutil
         corpus_dir = _PROJECT_ROOT / "corpus"
         deleted = []
         if corpus_dir.exists():
             for f in list(corpus_dir.iterdir()):
-                # Exception: preserve sample_doc (e.g. sample_doc_01.md)
-                if f.is_file() and not f.name.lower().startswith("sample_doc"):
+                if f.is_file():
                     try:
                         f.unlink()
                         deleted.append(f.name)
-                        logger.info(f"Deleted custom corpus document: {f.name}")
+                        logger.info(f"Deleted corpus document: {f.name}")
                     except Exception as e:
                         logger.error(f"Failed deleting {f.name}: {e}")
 
-        # If custom documents were deleted, re-index back to pristine sample_doc
-        if deleted:
-            try:
-                from slrag.ingest.indexer import HybridIndexer
-                await asyncio.to_thread(HybridIndexer.run_pipeline, corpus_dir)
-            except Exception as e:
-                logger.error(f"Error re-indexing after corpus reset: {e}")
+        # Completely clear FAISS index, BM25 index, and all indexing artifacts
+        index_dir = _PROJECT_ROOT / ".index"
+        if index_dir.exists():
+            for item in list(index_dir.iterdir()):
+                try:
+                    if item.is_file():
+                        item.unlink()
+                    elif item.is_dir():
+                        shutil.rmtree(item)
+                    logger.info(f"Deleted index artifact: {item.name}")
+                except Exception as e:
+                    logger.error(f"Failed deleting index artifact {item.name}: {e}")
+        index_dir.mkdir(parents=True, exist_ok=True)
 
         from slrag.api.ws_server import reset_retriever, get_session_manager
         reset_retriever()
         mgr = get_session_manager()
         mgr.reset_all()
 
-        docs = []
-        if corpus_dir.exists():
-            for f in sorted(corpus_dir.iterdir()):
-                if f.is_file():
-                    docs.append({
-                        "name": f.name,
-                        "size": f.stat().st_size,
-                        "is_sample": f.name.lower().startswith("sample_doc"),
-                    })
-
         return {
             "status": "ok",
-            "message": "All session data and custom documents cleared. Default sample_doc preserved.",
+            "message": "All session data, corpus documents, and FAISS index have been completely reset.",
             "deleted": deleted,
-            "documents": docs,
+            "documents": [],
         }
 
 

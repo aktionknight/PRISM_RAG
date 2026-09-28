@@ -8,5 +8,5 @@ providers:
     disableDeletion: false
     editable: true
     options:
-      path: /var/lib/grafana/dashboards
+      path: d:\downloads\PRISM_RAG\infra\grafana\dashboards
       foldersFromFilesStructure: false

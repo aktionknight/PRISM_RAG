@@ -53,9 +53,20 @@ export default function MetricsPanel({ telemetryData, sessionStats }) {
           <h3 className="grafana-title">
             <Icon name="dashboard" size={15} /> Grafana Dashboard
           </h3>
-          <button className="btn-mini" onClick={() => setShowGrafana(false)}>
-            <Icon name="arrowLeft" size={12} /> Back to Metrics
-          </button>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <a 
+              href="http://localhost:3000/d/slrag-main/slrag-streaming-live-rag?orgId=1&refresh=5s" 
+              target="_blank" 
+              rel="noreferrer"
+              className="btn-mini"
+              style={{ textDecoration: 'none', color: 'inherit' }}
+            >
+              Open in New Tab
+            </a>
+            <button className="btn-mini" onClick={() => setShowGrafana(false)}>
+              <Icon name="arrowLeft" size={12} /> Back to Metrics
+            </button>
+          </div>
         </div>
         <iframe
           src="http://localhost:3000/d/slrag-main/slrag-streaming-live-rag?orgId=1&refresh=5s&kiosk"

@@ -43,7 +43,10 @@ def evaluate_suppression(prefix: str, t_s: float) -> Optional[ControllerDecision
             t_s=t_s,
             decision="NO_RETRIEVAL",
             reason="presentation_restructure",
-            confidence=0.9
+            confidence=0.9,
+            stage=0,
+            stage_name="Stage 0: Suppression",
+            threshold=0.0,
         )
         
     return None

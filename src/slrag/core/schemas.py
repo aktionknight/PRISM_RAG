@@ -45,6 +45,7 @@ class ControllerReason(str, Enum):
     refractory_suppressed = "refractory_suppressed"
     llm_tiebreak = "llm_tiebreak"
     new_intent = "new_intent"
+    sentence_boundary = "sentence_boundary"
     stub = "stub"
 
 
@@ -89,6 +90,10 @@ class ControllerDecision(BaseModel):        # Diya emits this
     reason: str; confidence: float
     # v1.1
     stage: Optional[int] = Field(None, description="Cascade stage that produced the decision (0-4)")
+    stage_name: Optional[str] = Field(None, description="Descriptive name of the deciding stage")
+    margin: Optional[float] = Field(None, description="Margin computed at decision time")
+    entropy: Optional[float] = Field(None, description="Normalized entropy computed at decision time")
+    threshold: Optional[float] = Field(None, description="Operating threshold used for decision")
 
 
 class SubIntent(BaseModel):                 # Aakrit emits this

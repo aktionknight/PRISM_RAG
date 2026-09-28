@@ -7,3 +7,15 @@ runs/
 .index/
 .env
 models/
+
+# Local service binaries and archives (standalone Grafana & Prometheus)
+grafana-bin/
+grafana.zip
+prometheus-bin/
+prometheus.zip
+
+# Runtime data & logs
+*.db
+*.log
+data/
+scratch/
