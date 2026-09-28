@@ -75,7 +75,12 @@ def get_retriever():
 def reset_retriever():
     global _RETRIEVER
     _RETRIEVER = None
-    logger.info("Retriever instance reset and will be reloaded on next query.")
+    try:
+        from slrag.controller.probe import reset_probe_cache
+        reset_probe_cache()
+    except Exception:
+        pass
+    logger.info("Retriever instance and probe cache reset.")
 
 
 # ── Telemetry helpers ────────────────────────────────────────────────
@@ -279,7 +284,11 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
         "decision": str(decision),
         "reason": str(reason),
         "confidence": confidence,
-        "stage": stage,
+        "stage": decision_result.stage,
+        "stage_name": getattr(decision_result, "stage_name", None),
+        "margin": getattr(decision_result, "margin", None),
+        "entropy": getattr(decision_result, "entropy", None),
+        "threshold": getattr(decision_result, "threshold", None),
         "latency_ms": round(latency_ms, 2),
         "prefix": session.prefix,
     }
@@ -332,13 +341,9 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
             },
         ))
 
-        # Update sub-queries list (all known intents, not just novel)
-        all_queries = [
-            intent.query_nl
-            for intent in session.state.intent_set.values()
-            if intent.status.value != "superseded"
-        ]
-        session.sub_queries = list(dict.fromkeys(all_queries))
+        # Store current candidates for the synthesis engine later
+        session.current_candidates = all_candidates
+        session.sub_queries = list(dict.fromkeys(intent.query_nl for intent in all_candidates))
 
         await ws.send_json({
             "type": "subqueries_updated",
@@ -482,7 +487,7 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
         turn_id=session.turn_id,
         utterance=session.prefix,
         t_s_end=t_s,
-        sub_intents=tuple(session.state.intent_set.values()),
+        sub_intents=tuple(getattr(session, 'current_candidates', session.state.intent_set.values())),
         retrieval_events=tuple(session.retrieval_events),
         evidence=turn_evidence,
     )
@@ -615,11 +620,14 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
         },
     ))
 
-    # Reset per-turn state (prefix resets for next turn; retrieval events accumulate per session)
+    # Reset per-turn state (prefix resets for next turn)
     session.prefix = ""
     session.chunks.clear()
     session.controller_decisions.clear()
-    # NOTE: retrieval_events persist across turns for session continuity (G5)
+    session.retrieval_events.clear()
+    session.sub_queries.clear()
+    if hasattr(session, 'current_candidates'):
+        session.current_candidates.clear()
 
 
 # ── WebSocket Endpoint ──────────────────────────────────────────────

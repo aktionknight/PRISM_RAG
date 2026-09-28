@@ -32,6 +32,7 @@ export default function App() {
   const [finalAnswer, setFinalAnswer] = useState(null);
   const [citations, setCitations] = useState([]);
   const [uncertainties, setUncertainties] = useState([]);
+  const [history, setHistory] = useState([]);
 
   const [stats, setStats] = useState({
     retrievalCount: 0,
@@ -195,11 +196,33 @@ export default function App() {
         break;
 
       case 'answer_token':
-        setStreamingTokens(prev => [...prev, msg]);
+        setStreamingTokens(prev => {
+          const next = [...prev];
+          const existingIdx = next.findIndex(t => t.seq === msg.seq);
+          if (existingIdx >= 0) {
+            next[existingIdx] = msg;
+          } else {
+            next.push(msg);
+          }
+          return next;
+        });
         break;
 
       case 'answer_version': {
-        setStreamingTokens([]);
+        setStreamingTokens(currentTokens => {
+          setHistory(prev => [
+            ...prev,
+            {
+              type: 'agent',
+              answer: msg.answer || '',
+              version: msg.version || 1,
+              turn_id: msg.turn_id || 1,
+              claims: msg.claims || [],
+              citations: msg.citations || [],
+            }
+          ]);
+          return [];
+        });
         setFinalAnswer({
           version: msg.version || 1,
           turn_id: msg.turn_id || 1,
@@ -298,6 +321,7 @@ export default function App() {
     setFinalAnswer(null);
     setCitations([]);
     setUncertainties([]);
+    setHistory([]);
     setStats({
       retrievalCount: 0,
       intentCount: 0,
@@ -323,7 +347,7 @@ export default function App() {
       fabricatedIds: 0,
       traceCoverage: 1.0,
     });
-    showToast('Session and custom documents cleared. Default sample_doc preserved.', 'success');
+    showToast('All sessions, documents, and FAISS vector index completely reset.', 'success');
   };
 
 
@@ -332,6 +356,8 @@ export default function App() {
     if (!text || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     setInputVal('');
+    setUncertainties([]);
+    setHistory(prev => [...prev, { type: 'user', text }]);
 
     // Simulate streaming chunks
     const words = text.split(/\s+/);
@@ -438,14 +464,42 @@ export default function App() {
                     <div className="chunk-time">{(msg.t_s || 0).toFixed(1)}s</div>
                     <div className="chunk-content">
                       <div className="chunk-text">{msg.prefix || ''}</div>
-                      <span className={`chunk-badge ${badgeClass}`}>
-                        {badgeIcon && <Icon name={badgeIcon} size={10} strokeWidth={2.5} />}
-                        {badgeText}
-                      </span>
-                      <span className="chunk-reason">{msg.reason || ''}</span>
-                      <span className="confidence-bar">
-                        <span className="confidence-fill" style={{width: `${confPct}%`, background: confColor}}></span>
-                      </span>
+                      <div className="chunk-meta-row">
+                        <span className={`chunk-badge ${badgeClass}`}>
+                          {badgeIcon && <Icon name={badgeIcon} size={10} strokeWidth={2.5} />}
+                          {badgeText}
+                        </span>
+                        {msg.stage_name && (
+                          <span className="chunk-stage-badge" title={`Decided by: ${msg.stage_name}`}>
+                            {msg.stage_name}
+                          </span>
+                        )}
+                        <span className="chunk-reason">{msg.reason || ''}</span>
+                        <span className="confidence-bar">
+                          <span className="confidence-fill" style={{width: `${confPct}%`, background: confColor}}></span>
+                        </span>
+                      </div>
+                      {(msg.margin !== undefined && msg.margin !== null ||
+                        msg.entropy !== undefined && msg.entropy !== null ||
+                        msg.threshold !== undefined && msg.threshold !== null) && (
+                        <div className="chunk-metrics">
+                          {msg.margin !== undefined && msg.margin !== null && (
+                            <span className="chunk-metric-pill" title="Decision Margin / Content Anchor Count">
+                              margin: {typeof msg.margin === 'number' ? msg.margin.toFixed(3) : msg.margin}
+                            </span>
+                          )}
+                          {msg.entropy !== undefined && msg.entropy !== null && (
+                            <span className="chunk-metric-pill" title="Normalized Score Entropy (H_norm)">
+                              entropy: {typeof msg.entropy === 'number' ? msg.entropy.toFixed(3) : msg.entropy}
+                            </span>
+                          )}
+                          {msg.threshold !== undefined && msg.threshold !== null && (
+                            <span className="chunk-metric-pill" title="Active Stage Threshold">
+                              threshold: {typeof msg.threshold === 'number' ? msg.threshold.toFixed(3) : msg.threshold}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
@@ -461,65 +515,86 @@ export default function App() {
             <span className="pane-badge">V{stats.answerVersion}</span>
           </div>
           <div className="pane-body" ref={answerPaneRef}>
-            {chunks.length === 0 && !finalAnswer && streamingTokens.length === 0 && subQueries.length === 0 ? (
+            {history.length === 0 && streamingTokens.length === 0 && !finalAnswer && subQueries.length === 0 ? (
               <div className="empty-state">
                 <div className="empty-state-icon"><Icon name="message" size={20} strokeWidth={1.5} /></div>
                 <div className="empty-state-text">Ask a question to see the grounded answer</div>
               </div>
             ) : (
-              <>
-                {subQueries.length > 0 && (
-                  <div className="sub-queries-box">
-                    {subQueries.map((q, i) => (
-                      <span key={i} className="sub-query-tag">{q}</span>
-                    ))}
+              <div className="chat-history">
+                {history.map((item, idx) => (
+                  <div key={idx} className={`chat-message ${item.type}`}>
+                    {item.type === 'user' ? (
+                      <div className="user-message">
+                        {item.text}
+                      </div>
+                    ) : (
+                      <div className="agent-message">
+                        <div className="version-info">
+                          <span className="version-badge">V{item.version || 1}</span>
+                          <span>Turn {item.turn_id}</span>
+                          <span>•</span>
+                          <span>{(item.citations || []).length} citations</span>
+                        </div>
+                        {item.claims && item.claims.length > 0 && (
+                          <div className="sub-intents-container">
+                            {item.claims.map((claim, i) => (
+                              <div key={i} className="sub-intent-item fade-in">
+                                <span className="sub-intent-text">{claim.text}</span>
+                                {(claim.citations || []).map((c, j) => (
+                                  <span key={j} className="citation-chip">{c}</span>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        
+                        {item.answer && (
+                          <div className="answer-section fade-in" style={{ marginTop: '16px' }}>
+                            <div
+                              className="answer-sentence committed"
+                              dangerouslySetInnerHTML={{
+                                __html: escapeHtml(item.answer).replace(/\[([^\]]+§[^\]]+)\]/g, '<span class="citation-chip">$1</span>')
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {(history.length > 0 && history[history.length - 1].type === 'user') && (
+                  <div className="chat-message agent streaming">
+                    {subQueries.length > 0 && (
+                      <div className="sub-queries-box">
+                        {subQueries.map((q, i) => (
+                          <span key={i} className="sub-query-tag">{q}</span>
+                        ))}
+                      </div>
+                    )}
+                    {streamingTokens.length > 0 && (
+                      <div className="sub-intents-container streaming">
+                        {streamingTokens.map((t, i) => (
+                          <div key={i} className={`sub-intent-item ${t.kind || 'provisional'} fade-in`}>
+                            <span className="sub-intent-text">{t.text || ''}</span>
+                            {(t.citations || []).map((c, j) => (
+                              <span key={j} className="citation-chip" title={c}>{c}</span>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
-
-                {finalAnswer && (
-                  <div className="version-info">
-                    <span className="version-badge">V{finalAnswer.version}</span>
-                    <span>Turn {finalAnswer.turn_id}</span>
-                    <span>•</span>
-                    <span>{citations.length} citations</span>
-                  </div>
-                )}
-
-                {finalAnswer ? (
-                  <div className="answer-section fade-in">
-                    <div
-                      className="answer-sentence committed"
-                      dangerouslySetInnerHTML={{
-                        __html: escapeHtml(finalAnswer.answer).replace(/\[([^\]]+§[^\]]+)\]/g, '<span class="citation-chip">$1</span>')
-                      }}
-                    />
-                  </div>
-                ) : (
-                  streamingTokens.map((t, i) => (
-                    <div key={i} className={`answer-sentence ${t.kind || 'provisional'} fade-in`}>
-                      {t.text || ''}
-                      {(t.citations || []).map((c, j) => (
-                        <span key={j} className="citation-chip" title={c}>{c}</span>
-                      ))}
-                    </div>
-                  ))
-                )}
-
-                {citations.length > 0 && finalAnswer && (
-                  <div className="citation-row">
-                    {citations.map((c, i) => (
-                      <span key={i} className="citation-chip">{c}</span>
-                    ))}
-                  </div>
-                )}
-
+                
                 {uncertainties.map((u, i) => (
                   <div key={i} className="uncertainty-box fade-in">
                     <span className="uncertainty-icon"><Icon name="warning" size={13} /></span>
                     <span>{u}</span>
                   </div>
                 ))}
-              </>
+              </div>
             )}
           </div>
         </div>
@@ -608,7 +683,7 @@ export default function App() {
           style={{ display: 'none' }}
           onChange={handleFileUpload}
         />
-        <button className="btn btn-secondary" onClick={resetSession} title="Reset session and restore sample document">
+        <button className="btn btn-secondary" onClick={resetSession} title="Complete reset: clear all sessions, documents, and FAISS vector index">
           <Icon name="reset" size={14} />
           Reset
         </button>
