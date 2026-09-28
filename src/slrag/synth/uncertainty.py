@@ -116,7 +116,9 @@ class CoverageMatrix:
     ) -> CoverageRow:
         claim_ids = tuple(claim.claim_id for claim in mine)
         mentioned = set(self._entities(claim.text for claim in mine))
-        missing = tuple(anchor for anchor in anchors if anchor not in mentioned)
+        intent_anchors = set(self._entities([intent.query_nl, intent.search_string]))
+        relevant_anchors = [a for a in anchors if a in intent_anchors] if intent_anchors else anchors
+        missing = tuple(anchor for anchor in relevant_anchors if anchor not in mentioned)
         if not mentioned or not missing:     # general facet, or every anchor named
             return _row(intent, best, claim_ids, "covered", None)
         message = " ".join(self._fmt("entity_gap", intent, entity=entity) for entity in missing)
@@ -167,6 +169,7 @@ def _assign(
         for intent in sub_intents:
             if intent.facet == claim.facet:
                 assigned[intent.intent_id].append(claim)
+                break
     return assigned
 
 

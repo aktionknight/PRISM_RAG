@@ -511,7 +511,8 @@ class ExtractiveGenerator:
         retained = {_norm(_claim_row(claim)["text"]) for claim in retained_claims}
         drafts: list[DraftClaim] = []
         for intent in sub_intents:
-            for chunk, sentence in self._select(intent, evidence.get(intent.intent_id, ()), retained):
+            picked = self._select(intent, evidence.get(intent.intent_id, ()), retained)
+            for chunk, sentence in picked:
                 drafts.append(
                     DraftClaim(
                         seq=len(drafts),
@@ -522,6 +523,7 @@ class ExtractiveGenerator:
                         confidence=chunk.score,
                     )
                 )
+                retained.add(_norm(sentence))
         return drafts
 
     def _select(
