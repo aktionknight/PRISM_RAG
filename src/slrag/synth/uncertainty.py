@@ -148,6 +148,9 @@ class CoverageMatrix:
 
     def _fmt(self, key: str, intent: SubIntent, **values: str) -> str:
         label = facet_label(self.facets, intent.facet, key="uncertainty_label")
+        if intent.facet == "general" or label.lower() == "general / unclassified":
+            # If it's the general facet, name the topic in plain language (the query)
+            label = f"Information about '{intent.query_nl}'" if key != "clarification" else intent.query_nl
         return self._templates[key].format(facet_label=label, facet=intent.facet, query=intent.query_nl, **values)
 
 

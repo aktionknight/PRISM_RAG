@@ -346,6 +346,8 @@ class Decomposer:
                     novel=si_data.get("novel", True),
                     first_seen_ts=ts,
                     status=IntentStatus.pending,
+                    slots=si_data.get("slots", {}),
+                    supersedes=si_data.get("supersedes", []),
                 )
                 new_intents.append(intent)
             logger.info(

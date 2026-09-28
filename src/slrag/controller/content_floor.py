@@ -28,15 +28,15 @@ def evaluate_content_floor(prefix: str, t_s: float) -> Optional[ControllerDecisi
     nlp = _get_nlp()
     doc = nlp(prefix)
     
-    # 1. Check for dangling prepositions at the very end
+    # 1. Check for dangling prepositions/determiners at the very end
     is_dangling = False
     if len(doc) > 0:
         if not doc.has_annotation("ENT_IOB"):
             # Fallback
             words = prefix.split()
-            if words and words[-1].lower() in ["at", "to", "in", "for", "with", "on"]:
+            if words and words[-1].lower() in ["at", "to", "in", "for", "with", "on", "the", "a", "an"]:
                 is_dangling = True
-        elif doc[-1].pos_ == "ADP":
+        elif doc[-1].pos_ in ["ADP", "DET"]:
             is_dangling = True
             
     if is_dangling:

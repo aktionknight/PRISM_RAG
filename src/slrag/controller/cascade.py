@@ -62,6 +62,24 @@ class RetrievalController:
                  stage=None
              )
 
+        # --- Check for trailing correction marker ---
+        prefix_lower = prefix.lower().strip()
+        markers = config.get("self_correction_markers", [])
+        for m in markers:
+            if prefix_lower.endswith(m) or prefix_lower.endswith(m + ",") or prefix_lower.endswith(m + "."):
+                import re
+                match = re.search(re.escape(m) + r'[,\.]?\s*$', prefix, flags=re.IGNORECASE)
+                if match:
+                    self.session.current_prefix = prefix[match.start():].strip()
+                    self.session.last_retrieve_time = current_time_ms
+                    return ControllerDecision(
+                        t_s=t_s,
+                        decision="RETRIEVE",
+                        reason="correction_marker",
+                        confidence=1.0,
+                        stage=-1
+                    )
+
         # --- Refractory Period Check ---
         current_time_ms = t_s * 1000
         refractory_ms = config.get("refractory_ms", 250.0)

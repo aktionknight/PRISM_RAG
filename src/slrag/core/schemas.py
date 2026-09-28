@@ -73,6 +73,8 @@ class IntentStatus(str, Enum):
     dispatched = "dispatched"
     merged = "merged"
     refined = "refined"
+    superseded = "superseded"
+    active = "active"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -96,6 +98,9 @@ class SubIntent(BaseModel):                 # Aakrit emits this
     dispatched: bool = False
     retrieval_event_ids: list[str] = Field(default_factory=list)
     status: IntentStatus = IntentStatus.pending
+    slots: dict = Field(default_factory=dict)
+    superseded_by: Optional[str] = None
+    supersedes: list[str] = Field(default_factory=list)
 
 
 class RetrievedChunk(BaseModel):            # Aakrit emits this

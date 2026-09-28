@@ -1,85 +1,27 @@
-"""
-decompose/intent_set.py — Monotonic IntentSet manager for Phase 3 (Task 3.4).
+import re
+from slrag.core.config import get_controller_config
 
-Manages the session-scoped store of sub-intents. Intents are only ever added,
-never removed. Ensures novelty via facet and embedding-based deduplication.
-"""
-
-from __future__ import annotations
-
-import asyncio
-import logging
-from typing import Optional
-
-import numpy as np
-import ulid
-
-from slrag.core.schemas import IntentStatus, SubIntent
-from slrag.core.session import SessionState
-
-logger = logging.getLogger(__name__)
-
-# Lazy-loaded embedding model to avoid blocking on import
-_EMBEDDING_MODEL = None
-
-
-def _get_embedding_model(model_name: str):
-    """Lazy load the sentence-transformers model."""
-    global _EMBEDDING_MODEL
-    if _EMBEDDING_MODEL is None:
-        logger.info(f"Loading embedding model: {model_name}")
-        from sentence_transformers import SentenceTransformer
-
-        _EMBEDDING_MODEL = SentenceTransformer(model_name)
-    return _EMBEDDING_MODEL
-
-
-class IntentSet:
-    """Monotonic session-scoped store of sub-intents.
-
-    Intents can change status but are never removed. Handles novelty detection
-    using facet-matching and semantic similarity of the search string.
-    """
-
-    def __init__(
-        self,
-        session: SessionState,
-        embedding_model_name: str = "BAAI/bge-small-en-v1.5",
-        similarity_threshold: float = 0.88,
-    ):
-        self.session = session
-        self.embedding_model_name = embedding_model_name
-        self.similarity_threshold = similarity_threshold
-        self._lock = asyncio.Lock()
-        self._embedding_cache: dict[str, np.ndarray] = {}
-
-    def _generate_intent_id(self) -> str:
-        """Generate a unique ID for a new intent."""
-        # Handle different common Python ULID libraries (e.g. python-ulid vs ulid-py)
-        if hasattr(ulid, "new"):
-            return str(ulid.new())
-        return str(ulid.ULID())
-
-    def _get_embedding(self, text: str, model) -> np.ndarray:
-        """Get or compute the normalized embedding for a text."""
-        if text not in self._embedding_cache:
-            # normalize_embeddings=True allows dot product for cosine similarity
-            emb = model.encode(text, normalize_embeddings=True)
-            self._embedding_cache[text] = emb
-        return self._embedding_cache[text]
-
-    def _compute_similarity(self, emb1: np.ndarray, emb2: np.ndarray) -> float:
-        """Compute cosine similarity between two normalized embeddings."""
-        return float(np.dot(emb1, emb2))
-
-    async def add_intents(self, new_candidates: list[SubIntent], prefix: str = "") -> list[SubIntent]:
-        """Add genuinely new intents to the session, returning only the novel ones.
+def patch_intent_set():
+    with open('src/slrag/decompose/intent_set.py', 'r', encoding='utf-8') as f:
+        text = f.read()
+    
+    # We replace `async def add_intents(self, new_candidates: list[SubIntent]) -> list[SubIntent]:`
+    # and the whole body up to `def get_pending(self) -> list[SubIntent]:`
+    
+    import re
+    match = re.search(r'async def add_intents.*?def get_pending', text, flags=re.DOTALL)
+    if not match:
+        print("Could not find add_intents")
+        return
+        
+    replacement = """async def add_intents(self, new_candidates: list[SubIntent], prefix: str = "") -> list[SubIntent]:
+        \"\"\"Add genuinely new intents to the session, returning only the novel ones.
 
         Implements deterministic supersession rule:
         If a candidate has the same facet as an active intent, shares >= 1 slot key,
         and has a different value, mark the older one superseded unless an additive
         marker appears in the current window.
-        """
+        \"\"\"
         model = _get_embedding_model(self.embedding_model_name)
         novel_intents = []
         
@@ -132,8 +74,8 @@ class IntentSet:
                         sim = self._compute_similarity(candidate_emb, existing_emb)
 
                         if sim > self.similarity_threshold:
-                            cand_nums = set(re.findall(r'\d+', candidate.search_string))
-                            exist_nums = set(re.findall(r'\d+', existing_intent.search_string))
+                            cand_nums = set(re.findall(r'\\d+', candidate.search_string))
+                            exist_nums = set(re.findall(r'\\d+', existing_intent.search_string))
                             if cand_nums != exist_nums:
                                 logger.info(f"Skipping dedup for changed numbers: {cand_nums} vs {exist_nums}")
                                 continue
@@ -202,33 +144,11 @@ class IntentSet:
 
         return novel_intents
 
-    def get_pendingdef get_pending(self) -> list[SubIntent]:
-        """Return all undispatched intents."""
-        return self.session.get_pending_intents()
+    def get_pending"""
+    
+    text = text[:match.start()] + replacement + text[match.end()-len("def get_pending"):]
+    
+    with open('src/slrag/decompose/intent_set.py', 'w', encoding='utf-8') as f:
+        f.write(text)
 
-    def get_dispatched(self) -> list[SubIntent]:
-        """Return all already-dispatched intents."""
-        return self.session.get_dispatched_intents()
-
-    def mark_dispatched(self, intent_id: str) -> None:
-        """Mark an intent as dispatched."""
-        intent = self.session.intent_set.get(intent_id)
-        if intent:
-            intent.dispatched = True
-            intent.status = IntentStatus.dispatched
-            logger.debug(f"Marked intent {intent_id} as dispatched.")
-        else:
-            logger.warning(
-                f"Attempted to mark unknown intent {intent_id} as dispatched."
-            )
-
-    def mark_merged(self, intent_id: str, merged_into: str) -> None:
-        """Mark an intent as merged into another intent."""
-        intent = self.session.intent_set.get(intent_id)
-        if intent:
-            intent.status = IntentStatus.merged
-            logger.debug(f"Marked intent {intent_id} as merged into {merged_into}.")
-        else:
-            logger.warning(
-                f"Attempted to mark unknown intent {intent_id} as merged."
-            )
+patch_intent_set()

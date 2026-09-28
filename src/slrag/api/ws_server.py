@@ -72,6 +72,12 @@ def get_retriever():
         )
     return _RETRIEVER
 
+def reset_retriever():
+    global _RETRIEVER
+    _RETRIEVER = None
+    logger.info("Retriever instance reset and will be reloaded on next query.")
+
+
 # ── Telemetry helpers ────────────────────────────────────────────────
 
 def _make_event_id() -> str:
@@ -175,6 +181,12 @@ class SessionManager:
             session.state.destroy()
             return True
         return False
+
+    def reset_all(self) -> None:
+        """End and destroy all active sessions."""
+        for sid in list(self.sessions.keys()):
+            self.end(sid)
+
 
 
 _manager: SessionManager | None = None
@@ -298,7 +310,7 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
 
         # Diff against IntentSet — dispatch ONLY genuinely novel intents (S-2)
         try:
-            novel_intents = await session.intent_set.add_intents(all_candidates)
+            novel_intents = await session.intent_set.add_intents(all_candidates, prefix=session.prefix)
         except Exception as e:
             logger.warning(f"IntentSet dedup failed ({e}), treating all as novel")
             novel_intents = all_candidates
@@ -324,6 +336,7 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
         all_queries = [
             intent.query_nl
             for intent in session.state.intent_set.values()
+            if intent.status.value != "superseded"
         ]
         session.sub_queries = list(dict.fromkeys(all_queries))
 
@@ -674,6 +687,7 @@ async def websocket_session(ws: WebSocket):
                 ))
                 mgr.end(session.session_id)
                 session = mgr.create()
+                reset_retriever()
                 # New session telemetry
                 await bus.emit(_emit_telemetry(
                     session_id=session.session_id,

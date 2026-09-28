@@ -11,6 +11,8 @@ Given the current transcript prefix, decompose it into distinct, self-contained 
 3. Do NOT split tightly coupled concepts: two aspects of the same rule or item are ONE intent.
 4. DO split genuinely different information needs (e.g. distinct entities or disjoint topics).
 5. Generate an optimised search_string for each sub-query (keywords, not a sentence).
+6. Emit a dictionary of extracted slots for constraints (e.g., {"attendees": 30}).
+7. Output the user's FINAL intended intent set for the full prefix. If an intent revises or corrects a previous intent from the "Already Identified Intents" list, include the ID of the old intent in the `supersedes` list.
 
 ## Current Transcript Prefix
 {{ prefix }}
@@ -18,7 +20,7 @@ Given the current transcript prefix, decompose it into distinct, self-contained 
 {% if existing_intents %}
 ## Already Identified Intents (do NOT duplicate these)
 {% for intent in existing_intents %}
-- [{{ intent.facet }}] {{ intent.query_nl }}
+- [{{ intent.facet }}] {{ intent.query_nl }} (ID: {{ intent.intent_id }})
 {% endfor %}
 {% endif %}
 
@@ -30,7 +32,9 @@ Given the current transcript prefix, decompose it into distinct, self-contained 
       "facet": "<facet_key>",
       "query_nl": "<self-contained natural language query>",
       "search_string": "<optimised search keywords>",
-      "novel": true
+      "novel": true,
+      "slots": {"key": "value"},
+      "supersedes": ["<intent_id>"]
     }
   ]
 }

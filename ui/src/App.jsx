@@ -61,13 +61,45 @@ export default function App() {
   });
 
   const [inputVal, setInputVal] = useState('');
+  const [corpusDocs, setCorpusDocs] = useState([]);
+  const [isUploading, setIsUploading] = useState(false);
+  const [toast, setToast] = useState(null);
+
   const wsRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const toastTimerRef = useRef(null);
+
 
   const streamPaneRef = useRef(null);
   const answerPaneRef = useRef(null);
 
+  // Toast helper
+  const showToast = (message, type = 'info') => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ message, type });
+    toastTimerRef.current = setTimeout(() => setToast(null), 3500);
+  };
+
+  // Fetch corpus documents
+  const fetchCorpusDocs = async () => {
+    try {
+      const res = await fetch('/api/corpus/documents');
+      if (res.ok) {
+        const data = await res.json();
+        setCorpusDocs(data.documents || []);
+      }
+    } catch (e) {
+      console.warn('Failed to fetch corpus documents:', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchCorpusDocs();
+  }, []);
+
   // Auto-scroll panes
   useEffect(() => {
+
     if (streamPaneRef.current) {
       streamPaneRef.current.scrollTop = streamPaneRef.current.scrollHeight;
     }
@@ -213,7 +245,49 @@ export default function App() {
     }
   };
 
-  const resetSession = () => {
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    showToast(`Uploading and indexing "${file.name}"…`, 'info');
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const res = await fetch('/api/corpus/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setCorpusDocs(data.documents || []);
+        showToast(`"${file.name}" indexed successfully!`, 'success');
+      } else {
+        const err = await res.json().catch(() => ({ detail: 'Upload failed' }));
+        showToast(`Upload failed: ${err.detail || 'Server error'}`, 'warn');
+      }
+    } catch (err) {
+      showToast(`Upload failed: ${err.message}`, 'warn');
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const resetSession = async () => {
+    try {
+      const res = await fetch('/api/corpus/reset', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setCorpusDocs(data.documents || []);
+      }
+    } catch (e) {
+      console.warn('Corpus reset endpoint failed:', e);
+    }
+
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'new_session' }));
     }
@@ -249,7 +323,9 @@ export default function App() {
       fabricatedIds: 0,
       traceCoverage: 1.0,
     });
+    showToast('Session and custom documents cleared. Default sample_doc preserved.', 'success');
   };
+
 
   const sendQuery = () => {
     const text = inputVal.trim();
@@ -317,10 +393,18 @@ export default function App() {
           </div>
         </div>
         <div className="header-right">
+          <div
+            className="corpus-badge"
+            title={`Corpus: ${corpusDocs.map(d => d.name + (d.is_sample ? ' (sample)' : '')).join(', ')}`}
+          >
+            <Icon name="file" size={12} />
+            <span>{corpusDocs.length} Doc{corpusDocs.length === 1 ? '' : 's'}</span>
+          </div>
           <div className={`status-dot ${status === STATUS_CONNECTED ? '' : 'disconnected'}`}></div>
           <span className="status-text">{status}</span>
           <span className="session-id">{sessionId}</span>
         </div>
+
       </header>
 
       <main className="main">
@@ -406,7 +490,7 @@ export default function App() {
                     <div
                       className="answer-sentence committed"
                       dangerouslySetInnerHTML={{
-                        __html: escapeHtml(finalAnswer.answer).replace(/\[(Doc_\d+\s*§\w+)\]/g, '<span class="citation-chip">$1</span>')
+                        __html: escapeHtml(finalAnswer.answer).replace(/\[([^\]]+§[^\]]+)\]/g, '<span class="citation-chip">$1</span>')
                       }}
                     />
                   </div>
@@ -440,40 +524,52 @@ export default function App() {
           </div>
         </div>
 
-        {/* Right Pane: Metrics & Telemetry */}
-        <div className="pane">
-          <div className="pane-header">
-            <span className="pane-title"><Icon name="gauge" size={14} /> Metrics &amp; Telemetry</span>
-            <span className="pane-badge">{stats.telemetryEventCount} events</span>
+        {/* Right Column: Split into Top Box (Metrics) & Bottom Box (Intents Retrieval Timeline) */}
+        <div className="pane-column">
+          {/* Top Box: Metrics & Telemetry */}
+          <div className="pane pane-metrics">
+            <div className="pane-header">
+              <span className="pane-title"><Icon name="gauge" size={14} /> Metrics &amp; Telemetry</span>
+              <span className="pane-badge">{stats.telemetryEventCount} events</span>
+            </div>
+            <div className="pane-body pane-body-metrics">
+              <MetricsPanel telemetryData={telemetryData} sessionStats={stats} />
+            </div>
           </div>
-          <div className="pane-body" style={{padding: 0}}>
-            <MetricsPanel telemetryData={telemetryData} sessionStats={stats} />
-            {/* Retrieval Gantt - Kept in main UI for quick visibility */}
-            <div className="timeline-section">
-              <div className="telemetry-card-title">
-                <Icon name="clock" size={12} /> Retrieval Timeline
-              </div>
-              <div>
-                {retrievals.length === 0 ? (
-                  <div className="timeline-empty">No retrievals yet</div>
-                ) : (() => {
-                  const maxTs = Math.max(...retrievals.map(e => e.timestamp_s || 0), 1);
-                  return retrievals.map((ev, idx) => {
-                    const left = ((ev.timestamp_s || 0) / (maxTs + 0.5)) * 100;
-                    const width = Math.max(15, 100 - left);
-                    const isSpec = ev.trigger === 'provisional';
-                    return (
-                      <div key={idx} className="gantt-bar">
-                        <span className="gantt-label" title={ev.query || ''}>{ev.facet || ev.query || `Q${idx + 1}`}</span>
-                        <div className="gantt-track">
-                          <div className={`gantt-fill ${isSpec ? 'speculative' : 'confirmed'}`} style={{left:`${left}%`, width:`${width}%`}}></div>
+
+          {/* Bottom Box: Intents Retrieval Timeline */}
+          <div className="pane pane-timeline">
+            <div className="pane-header">
+              <span className="pane-title"><Icon name="clock" size={14} /> Retrieval Timeline</span>
+              <span className="pane-badge">{retrievals.length} {retrievals.length === 1 ? 'query' : 'queries'}</span>
+            </div>
+            <div className="pane-body pane-body-timeline">
+              {retrievals.length === 0 ? (
+                <div className="timeline-empty-state">
+                  <div className="empty-state-icon"><Icon name="clock" size={18} strokeWidth={1.5} /></div>
+                  <div className="empty-state-text">No sub-intent retrievals yet</div>
+                </div>
+              ) : (() => {
+                const maxTs = Math.max(...retrievals.map(e => e.timestamp_s || 0), 1);
+                return (
+                  <div className="timeline-list">
+                    {retrievals.map((ev, idx) => {
+                      const left = ((ev.timestamp_s || 0) / (maxTs + 0.5)) * 100;
+                      const width = Math.max(15, 100 - left);
+                      const isSpec = ev.trigger === 'provisional';
+                      return (
+                        <div key={idx} className="gantt-bar">
+                          <span className="gantt-label" title={ev.query || ''}>{ev.facet || ev.query || `Q${idx + 1}`}</span>
+                          <div className="gantt-track">
+                            <div className={`gantt-fill ${isSpec ? 'speculative' : 'confirmed'}`} style={{left:`${left}%`, width:`${width}%`}}></div>
+                          </div>
+                          <span className="gantt-time">{(ev.timestamp_s || 0).toFixed(1)}s</span>
                         </div>
-                        <span className="gantt-time">{(ev.timestamp_s || 0).toFixed(1)}s</span>
-                      </div>
-                    );
-                  });
-                })()}
-              </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -496,11 +592,37 @@ export default function App() {
           <Icon name="play" size={12} />
           Demo
         </button>
-        <button className="btn btn-secondary" onClick={resetSession}>
+        <button
+          className="btn btn-secondary"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isUploading}
+          title="Upload custom markdown or text document to corpus"
+        >
+          <Icon name="upload" size={14} />
+          {isUploading ? 'Indexing…' : 'Upload Doc'}
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".md,.txt,.markdown"
+          style={{ display: 'none' }}
+          onChange={handleFileUpload}
+        />
+        <button className="btn btn-secondary" onClick={resetSession} title="Reset session and restore sample document">
           <Icon name="reset" size={14} />
           Reset
         </button>
       </div>
+
+      {toast && (
+        <div className={`toast-notification ${toast.type}`}>
+          <span className="toast-icon">
+            <Icon name={toast.type === 'success' ? 'check' : toast.type === 'warn' ? 'warning' : 'file'} size={14} />
+          </span>
+          <span>{toast.message}</span>
+        </div>
+      )}
     </>
   );
 }
+

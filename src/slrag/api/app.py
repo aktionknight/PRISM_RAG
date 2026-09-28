@@ -11,11 +11,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import asyncio
 import yaml
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
+
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +141,121 @@ def create_app() -> FastAPI:
         from slrag.api.ws_server import get_session_manager
         mgr = get_session_manager()
         return {"sessions": list(mgr.sessions.keys()), "count": len(mgr.sessions)}
+
+    # -- Corpus Document Management Endpoints --
+
+    @app.get("/api/corpus/documents")
+    async def list_corpus_documents():
+        """List all documents currently in the corpus."""
+        corpus_dir = _PROJECT_ROOT / "corpus"
+        docs = []
+        if corpus_dir.exists():
+            for f in sorted(corpus_dir.iterdir()):
+                if f.is_file():
+                    docs.append({
+                        "name": f.name,
+                        "size": f.stat().st_size,
+                        "is_sample": f.name.lower().startswith("sample_doc"),
+                    })
+        return {"documents": docs, "count": len(docs)}
+
+    @app.post("/api/corpus/upload")
+    async def upload_corpus_document(file: UploadFile = File(...)):
+        """Upload custom markdown or text document to corpus and re-index."""
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No file provided")
+
+        allowed_exts = {".md", ".txt", ".markdown"}
+        ext = Path(file.filename).suffix.lower()
+        if ext not in allowed_exts:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file extension '{ext}'. Only .md and .txt files are supported."
+            )
+
+        corpus_dir = _PROJECT_ROOT / "corpus"
+        corpus_dir.mkdir(parents=True, exist_ok=True)
+
+        safe_name = Path(file.filename).name
+        target_path = corpus_dir / safe_name
+
+        content = await file.read()
+        target_path.write_bytes(content)
+        logger.info(f"Saved custom document to corpus: {target_path} ({len(content)} bytes)")
+
+        # Run ingest and index pipeline in threadpool
+        try:
+            from slrag.ingest.indexer import HybridIndexer
+            await asyncio.to_thread(HybridIndexer.run_pipeline, corpus_dir)
+        except Exception as e:
+            logger.error(f"Error during re-indexing: {e}")
+            raise HTTPException(status_code=500, detail=f"Indexing failed: {str(e)}")
+
+        from slrag.api.ws_server import reset_retriever
+        reset_retriever()
+
+        docs = []
+        for f in sorted(corpus_dir.iterdir()):
+            if f.is_file():
+                docs.append({
+                    "name": f.name,
+                    "size": f.stat().st_size,
+                    "is_sample": f.name.lower().startswith("sample_doc"),
+                })
+
+        return {
+            "status": "ok",
+            "message": f"Document '{safe_name}' uploaded and corpus indexed successfully.",
+            "uploaded": safe_name,
+            "documents": docs,
+        }
+
+    @app.post("/api/corpus/reset")
+    async def reset_corpus():
+        """Reset corpus and session: remove custom documents (keep sample_doc) and clear session state."""
+        corpus_dir = _PROJECT_ROOT / "corpus"
+        deleted = []
+        if corpus_dir.exists():
+            for f in list(corpus_dir.iterdir()):
+                # Exception: preserve sample_doc (e.g. sample_doc_01.md)
+                if f.is_file() and not f.name.lower().startswith("sample_doc"):
+                    try:
+                        f.unlink()
+                        deleted.append(f.name)
+                        logger.info(f"Deleted custom corpus document: {f.name}")
+                    except Exception as e:
+                        logger.error(f"Failed deleting {f.name}: {e}")
+
+        # If custom documents were deleted, re-index back to pristine sample_doc
+        if deleted:
+            try:
+                from slrag.ingest.indexer import HybridIndexer
+                await asyncio.to_thread(HybridIndexer.run_pipeline, corpus_dir)
+            except Exception as e:
+                logger.error(f"Error re-indexing after corpus reset: {e}")
+
+        from slrag.api.ws_server import reset_retriever, get_session_manager
+        reset_retriever()
+        mgr = get_session_manager()
+        mgr.reset_all()
+
+        docs = []
+        if corpus_dir.exists():
+            for f in sorted(corpus_dir.iterdir()):
+                if f.is_file():
+                    docs.append({
+                        "name": f.name,
+                        "size": f.stat().st_size,
+                        "is_sample": f.name.lower().startswith("sample_doc"),
+                    })
+
+        return {
+            "status": "ok",
+            "message": "All session data and custom documents cleared. Default sample_doc preserved.",
+            "deleted": deleted,
+            "documents": docs,
+        }
+
 
     # -- Frontend UI --
     @app.get("/", response_class=HTMLResponse)
