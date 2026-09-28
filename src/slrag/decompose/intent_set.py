@@ -202,7 +202,7 @@ class IntentSet:
 
         return novel_intents
 
-    def get_pendingdef get_pending(self) -> list[SubIntent]:
+    def get_pending(self) -> list[SubIntent]:
         """Return all undispatched intents."""
         return self.session.get_pending_intents()
 

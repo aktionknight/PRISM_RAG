@@ -105,8 +105,8 @@ def create_app() -> FastAPI:
 
         # Warm up CrossEncoder NLI Scorer (if configured)
         try:
-            from slrag.synth.verifier import get_entailment_scorer
-            get_entailment_scorer()
+            from slrag.synth.verifier import make_scorer
+            make_scorer()
         except Exception as e:
             logger.error(f"CrossEncoder NLI load failed: {e}")
 
