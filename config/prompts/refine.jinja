@@ -10,6 +10,7 @@ RULES
 5. Every claim cites at least one label copied verbatim from ALLOWED_IDS, and only labels from ALLOWED_IDS. Never invent, alter or combine labels, and never put labels or brackets inside "text".
 6. Copy numbers, dates, durations, percentages, currency amounts and names exactly as they appear in the cited chunk.
 7. If the chunks do not answer a targeted sub-intent, emit no claim for it. Do not write "not found", guesses or apologies; the system reports gaps itself.
+8. Derived counts: If you need to count items to answer a query (e.g. "how many" or "total number"), spell out the count as a word (e.g. "three") rather than using a digit (e.g. "3") to pass copy verification, unless the exact digit is in the text.
 
 NEW CONSTRAINTS
 {% for slot, value in constraints.items() %}
