@@ -220,7 +220,7 @@ class SynthesisEngine:
             self._intents[intent.intent_id] = intent
             self._intent_evidence.setdefault(intent.intent_id, []).extend(evidence.get(intent.intent_id, []))
 
-        verifier, streamer = self._verification(evidence)
+        verifier, streamer = self._verification(evidence, turn.utterance)
         drafts = self.generator.generate(turn.sub_intents, evidence, constraints=self.session_constraints)
         started = time.perf_counter()
         events: list[StreamEvent] = []
@@ -300,7 +300,7 @@ class SynthesisEngine:
             self._intents[intent.intent_id] = intent
             self._intent_evidence.setdefault(intent.intent_id, []).extend(evidence.get(intent.intent_id, []))
 
-        verifier, streamer = self._verification(evidence)
+        verifier, streamer = self._verification(evidence, turn.utterance)
         drafts = self.generator.generate(
             targeted,
             evidence,
@@ -468,12 +468,17 @@ class SynthesisEngine:
                                   citations=result.citations, facet=result.draft.facet,
                                   intent_id=result.draft.intent_id, verification=result)
 
-    def _verification(self, evidence: Mapping[str, Sequence[RetrievedChunk]]) -> tuple[ClaimVerifier, TwoPassStreamer]:
+    def _verification(self, evidence: Mapping[str, Sequence[RetrievedChunk]], utterance: str) -> tuple[ClaimVerifier, TwoPassStreamer]:
         """Allowlist = exactly the chunks in this turn's context (S-6 layer 1)."""
         chunks = [chunk for rows in evidence.values() for chunk in rows]
         self.graph.register_evidence(chunks)
-        verifier = ClaimVerifier(CitationAllowlist.from_chunks(chunks), config=self.config, scorer=self.scorer,
-                                 entities=self.entities)
+        verifier = ClaimVerifier(
+            CitationAllowlist.from_chunks(chunks), 
+            config=self.config, 
+            scorer=self.scorer,
+            entities=self.entities,
+            exempt=utterance
+        )
         return verifier, TwoPassStreamer(verifier)
 
     def _finish(

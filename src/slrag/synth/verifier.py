@@ -298,16 +298,19 @@ def make_entity_extractor(config: dict[str, Any] | None = None) -> EntityExtract
     raise ValueError(f"unknown verifier.entity_backend {backend!r} (expected 'regex' or 'spacy')")
 
 
-def copy_check(sentence: str, premises: Sequence[str], entities: EntityExtractor = extract_proper_nouns) -> tuple[str, ...]:
+def copy_check(sentence: str, premises: Sequence[str], entities: EntityExtractor = extract_proper_nouns, exempt: str = "") -> tuple[str, ...]:
     """Hard values of ``sentence`` absent from ALL premises (numerals, names). Empty = pass."""
     available = {numeral for premise in premises for numeral in extract_numerals(premise)}
     lowered = [premise.lower() for premise in premises]
+    exempt_lowered = exempt.lower()
     missing: dict[str, None] = {}
     for numeral in extract_numerals(sentence):
         if numeral not in available:
             missing[numeral] = None
     for noun in entities(sentence):
         pattern = re.compile(r"(?<!\w)" + r"\s+".join(map(re.escape, noun.lower().split())) + r"(?!\w)")
+        if exempt_lowered and pattern.search(exempt_lowered):
+            continue
         if not any(pattern.search(premise) for premise in lowered):
             missing[noun] = None
     return tuple(missing)
@@ -402,8 +405,10 @@ class ClaimVerifier:
         config: dict[str, Any] | None = None,
         scorer: EntailmentScorer | None = None,
         entities: EntityExtractor | None = None,
+        exempt: str = "",
     ) -> None:
         self.allowlist = allowlist
+        self.exempt = exempt
         self.config = _config(config)
         cfg = self.config.get("verifier", {})
         self.threshold = threshold_for(self.config)
@@ -442,7 +447,7 @@ class ClaimVerifier:
             elif not supporting:
                 reasons.append("negation_mismatch")
             if self.copy_check_enabled:
-                missing = copy_check(text, [c.text for c in cited], self.entities)
+                missing = copy_check(text, [c.text for c in cited], self.entities, self.exempt)
                 if missing:
                     reasons.append("copy_check_failed:" + ",".join(missing))
 
@@ -513,7 +518,7 @@ class ClaimVerifier:
             for chunk, score in zip(candidates, scores)
             if score >= self.threshold
             and not self._flipped(chunk.text, sentence)
-            and not (self.copy_check_enabled and copy_check(sentence, [chunk.text], self.entities))
+            and not (self.copy_check_enabled and copy_check(sentence, [chunk.text], self.entities, self.exempt))
         ]
         return passing, max(scores)
 
