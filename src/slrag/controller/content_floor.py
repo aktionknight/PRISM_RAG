@@ -44,7 +44,11 @@ def evaluate_content_floor(prefix: str, t_s: float) -> Optional[ControllerDecisi
             t_s=t_s,
             decision="WAIT",
             reason="intent_unstable",
-            confidence=0.8
+            confidence=0.8,
+            stage=1,
+            stage_name="Stage 1: Content Floor",
+            margin=0.0,
+            threshold=1.0,
         )
         
     # 2. Count content anchors (GPE, ORG, PRODUCT, CARDINAL, NOUN)
@@ -68,9 +72,46 @@ def evaluate_content_floor(prefix: str, t_s: float) -> Optional[ControllerDecisi
             t_s=t_s,
             decision="WAIT",
             reason="intent_unstable",
-            confidence=0.9
+            confidence=0.9,
+            stage=1,
+            stage_name="Stage 1: Content Floor",
+            margin=float(content_anchors),
+            threshold=1.0,
         )
         
+    return None
+
+
+def evaluate_sentence_boundary(prefix: str, t_s: float) -> Optional[ControllerDecision]:
+    """
+    Boundary Rule: A completed sentence with at least one content anchor
+    triggers RETRIEVE regardless of the probe.
+    """
+    clean_prefix = prefix.strip()
+    if not clean_prefix:
+        return None
+
+    import re
+    # Find any sentence boundary (including those followed by space and more text)
+    matches = list(re.finditer(r'[.?!][\'"»\)]?(?:\s+|$)', clean_prefix))
+    if not matches:
+        return None
+
+    for match in matches:
+        sentence_text = clean_prefix[:match.end()].strip()
+        anchors = count_content_anchors(sentence_text)
+        if anchors >= 1:
+            return ControllerDecision(
+                t_s=t_s,
+                decision="RETRIEVE",
+                reason="sentence_boundary",
+                confidence=0.95,
+                stage=1,
+                stage_name="Stage 1: Sentence Boundary",
+                margin=float(anchors),
+                threshold=1.0,
+            )
+
     return None
 
 def count_content_anchors(prefix: str) -> int:
