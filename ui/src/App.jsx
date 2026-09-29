@@ -658,12 +658,13 @@ export default function App() {
           value={inputVal}
           onChange={e => setInputVal(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && sendQuery()}
+          disabled={isUploading}
         />
-        <button id="sendBtn" className="btn btn-primary" onClick={sendQuery}>
+        <button id="sendBtn" className="btn btn-primary" onClick={sendQuery} disabled={isUploading}>
           <Icon name="send" size={14} />
           Send
         </button>
-        <button className="btn btn-demo" onClick={runDemo}>
+        <button className="btn btn-demo" onClick={runDemo} disabled={isUploading}>
           <Icon name="play" size={12} />
           Demo
         </button>
@@ -682,8 +683,9 @@ export default function App() {
           accept=".md,.txt,.markdown"
           style={{ display: 'none' }}
           onChange={handleFileUpload}
+          disabled={isUploading}
         />
-        <button className="btn btn-secondary" onClick={resetSession} title="Complete reset: clear all sessions, documents, and FAISS vector index">
+        <button className="btn btn-secondary" onClick={resetSession} disabled={isUploading} title="Complete reset: clear all sessions, documents, and FAISS vector index">
           <Icon name="reset" size={14} />
           Reset
         </button>

@@ -252,7 +252,7 @@ class SynthesisEngine:
         if lineage is not None:
             telemetry.add("answer_version", 0.0, lineage.to_dict())
 
-        yield self._finish(
+        yield await self._finish(
             turn,
             classification,
             telemetry,
@@ -334,7 +334,7 @@ class SynthesisEngine:
         if lineage is not None:
             telemetry.add("answer_version", 0.0, lineage.to_dict())
 
-        yield self._finish(
+        yield await self._finish(
             turn,
             classification,
             telemetry,
@@ -481,7 +481,7 @@ class SynthesisEngine:
         )
         return verifier, TwoPassStreamer(verifier)
 
-    def _finish(
+    async def _finish(
         self,
         turn: TurnInput,
         classification: TurnClassification,
@@ -508,12 +508,28 @@ class SynthesisEngine:
         self._uncertainty = uncertainty
         telemetry.add("coverage", _ms(started), self.coverage.to_telemetry(rows))
 
-        citations = answer_citations(active)
+        display_active = list(active)
+
+        citations = answer_citations(display_active)
+        raw_answer = render_claims(display_active, config=self.config)
+        if display_active and hasattr(self.generator, "client") and self.generator.client:
+            prompt = (
+                "You are an assistant. Rewrite the following facts into a single cohesive, "
+                "natural-sounding paragraph. Keep every citation marker EXACTLY as it appears "
+                "in the text (e.g. [Doc_1 §1]). Do not invent any new facts or drop any citations.\n\n"
+            ) + raw_answer
+            try:
+                resp = await self.generator.client.complete(prompt)
+                if resp and resp.text:
+                    raw_answer = resp.text
+            except Exception:
+                pass
+
         output = build_answer_output(
             session_id=self.session_id,
             turn_id=turn.turn_id,
             answer_version=self.graph.version,
-            answer=render_claims(active, config=self.config),
+            answer=raw_answer,
             citations=citations,
             uncertainty=uncertainty,
             sub_queries=sub_queries,

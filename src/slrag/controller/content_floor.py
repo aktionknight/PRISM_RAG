@@ -85,20 +85,27 @@ def evaluate_content_floor(prefix: str, t_s: float) -> Optional[ControllerDecisi
 def evaluate_sentence_boundary(prefix: str, t_s: float) -> Optional[ControllerDecision]:
     """
     Boundary Rule: A completed sentence with at least one content anchor
-    triggers RETRIEVE regardless of the probe.
+    triggers RETRIEVE regardless of the probe. Also triggers on clause-level conjunctions.
     """
     clean_prefix = prefix.strip()
     if not clean_prefix:
         return None
 
-    import re
-    # Find any sentence boundary (including those followed by space and more text)
-    matches = list(re.finditer(r'[.?!][\'"»\)]?(?:\s+|$)', clean_prefix))
-    if not matches:
+    nlp = _get_nlp()
+    doc = nlp(clean_prefix)
+    
+    split_indices = []
+    for token in doc:
+        if token.pos_ == "PUNCT" and token.text in {".", "?", "!"}:
+            split_indices.append(token.i + 1)
+        elif token.lemma_.lower() in {"and", "but", "or", "also", "plus"} and token.dep_ == "cc" and token.head.pos_ in {"VERB", "AUX"}:
+            split_indices.append(token.i)
+            
+    if not split_indices:
         return None
 
-    for match in matches:
-        sentence_text = clean_prefix[:match.end()].strip()
+    for idx in split_indices:
+        sentence_text = doc[:idx].text.strip()
         anchors = count_content_anchors(sentence_text)
         if anchors >= 1:
             return ControllerDecision(

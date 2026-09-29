@@ -96,7 +96,7 @@ class RetrievalController:
             if boundary_decision.decision == "RETRIEVE":
                  self.session.last_retrieve_time = current_time_ms
                  import re
-                 matches = list(re.finditer(r'[.?!][\'"»\)]?(?:\s+|$)', prefix))
+                 matches = list(re.finditer(r'([.?!][\'"»\)]?(?:\s+|$))|(?:\s+(and|but|or|also|plus)\s+)', prefix, flags=re.IGNORECASE))
                  self.session.current_prefix = prefix[matches[-1].end():] if matches else ""
             return boundary_decision
             
@@ -106,7 +106,7 @@ class RetrievalController:
             if decision.decision == "RETRIEVE":
                  self.session.last_retrieve_time = current_time_ms
                  import re
-                 matches = list(re.finditer(r'[.?!][\'"»\)]?(?:\s+|$)', prefix))
+                 matches = list(re.finditer(r'([.?!][\'"»\)]?(?:\s+|$))|(?:\s+(and|but|or|also|plus)\s+)', prefix, flags=re.IGNORECASE))
                  self.session.current_prefix = prefix[matches[-1].end():] if matches else ""
             return decision
             
@@ -116,7 +116,7 @@ class RetrievalController:
              if decision.decision == "RETRIEVE":
                  self.session.last_retrieve_time = current_time_ms
                  import re
-                 matches = list(re.finditer(r'[.?!][\'"»\)]?(?:\s+|$)', prefix))
+                 matches = list(re.finditer(r'([.?!][\'"»\)]?(?:\s+|$))|(?:\s+(and|but|or|also|plus)\s+)', prefix, flags=re.IGNORECASE))
                  self.session.current_prefix = prefix[matches[-1].end():] if matches else ""
              return decision
               

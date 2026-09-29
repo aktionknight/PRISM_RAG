@@ -1,10 +1,13 @@
 PYTHON ?= .venv/bin/python
 
-.PHONY: up setup setup-nli index replay bench score test test-nli lint clean bench-c4 calibrate-nli ablate ablate-a3
+.PHONY: up grafana setup setup-nli index replay bench score test test-nli lint clean bench-c4 calibrate-nli ablate ablate-a3
 
 # Default target
 up:
 	docker compose up
+
+grafana:              ## start local Grafana with iframe embedding enabled
+	$(PYTHON) -m slrag.api.cli grafana
 
 setup:                ## core + dev deps, plus NLTK data and the spaCy pipeline baked into models/ (never at runtime)
 	$(PYTHON) -m pip install -e ".[dev]"

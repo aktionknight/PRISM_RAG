@@ -487,7 +487,7 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
         turn_id=session.turn_id,
         utterance=session.prefix,
         t_s_end=t_s,
-        sub_intents=tuple(getattr(session, 'current_candidates', session.state.intent_set.values())),
+        sub_intents=tuple(getattr(session, 'current_candidates', [])),
         retrieval_events=tuple(session.retrieval_events),
         evidence=turn_evidence,
     )
