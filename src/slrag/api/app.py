@@ -120,16 +120,26 @@ def create_app() -> FastAPI:
         # Warm up Ollama LLM (this usually takes ~1 min for the first query)
         try:
             import aiohttp
+            synth_cfg_path = _PROJECT_ROOT / "config" / "synth.yaml"
+            model = "llama3.2:1b"
+            if synth_cfg_path.exists():
+                try:
+                    with open(synth_cfg_path, "r", encoding="utf-8") as f:
+                        sc = yaml.safe_load(f) or {}
+                        model = sc.get("generator", {}).get("openai_compatible", {}).get("model", model)
+                except Exception:
+                    pass
+
             async with aiohttp.ClientSession() as session:
                 payload = {
-                    "model": "qwen2.5:7b-instruct",
+                    "model": model,
                     "messages": [{"role": "user", "content": "warmup"}],
                     "max_tokens": 1
                 }
-                logger.info("Warming up Ollama LLM...")
+                logger.info(f"Warming up Ollama LLM ({model})...")
                 async with session.post("http://127.0.0.1:11434/v1/chat/completions", json=payload, timeout=120) as resp:
                     await resp.json()
-                logger.info("Ollama LLM warmup complete.")
+                logger.info(f"Ollama LLM warmup complete ({model}).")
         except Exception as e:
             logger.error(f"Ollama load failed: {e}")
 

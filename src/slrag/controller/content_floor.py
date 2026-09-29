@@ -32,12 +32,13 @@ def evaluate_content_floor(prefix: str, t_s: float) -> Optional[ControllerDecisi
     # 1. Check for dangling prepositions/determiners at the very end
     is_dangling = False
     if len(doc) > 0:
+        last_word = doc[-1].text.lower()
         if not doc.has_annotation("ENT_IOB"):
             # Fallback
             words = prefix.split()
             if words and words[-1].lower() in ["at", "to", "in", "for", "with", "on", "the", "a", "an"]:
                 is_dangling = True
-        elif doc[-1].pos_ in ["ADP", "DET"]:
+        elif doc[-1].pos_ in ["ADP", "DET"] or last_word in ["at", "to", "in", "for", "with", "on", "of", "the", "a", "an", "and", "or", "but"]:
             is_dangling = True
             
     if is_dangling:
@@ -64,7 +65,7 @@ def evaluate_content_floor(prefix: str, t_s: float) -> Optional[ControllerDecisi
                 content_anchors += 1
                 
         for token in doc:
-            if token.pos_ == "NOUN" and not token.ent_type_:
+            if token.pos_ in ["NOUN", "PROPN"] and not token.ent_type_:
                 content_anchors += 1
             
     # Need at least 1 content anchor to proceed
@@ -162,7 +163,7 @@ def count_content_anchors(prefix: str) -> int:
                 content_anchors += 1
                 
         for token in doc:
-            if token.pos_ == "NOUN" and not token.ent_type_:
+            if token.pos_ in ["NOUN", "PROPN"] and not token.ent_type_:
                 content_anchors += 1
             
     return content_anchors

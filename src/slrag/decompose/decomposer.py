@@ -211,8 +211,11 @@ class Decomposer:
             logger.warning("aiohttp not available — LLM calls disabled")
             return None
 
+        synth_config = self._load_yaml(self.config_dir / "synth.yaml")
+        model = synth_config.get("generator", {}).get("openai_compatible", {}).get("model", "llama3.2:1b")
+
         payload = {
-            "model": "qwen2.5:7b-instruct",
+            "model": model,
             "messages": [
                 {
                     "role": "system",

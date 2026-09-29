@@ -745,6 +745,8 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
     session.retrieval_events.clear()
     session.sub_queries.clear()
     session.state.controller.last_retrieve_time = -1000.0
+    session.state.controller.last_decision = ""
+    session.state.controller.has_retrieved_this_intent = False
     if hasattr(session, 'current_candidates'):
         session.current_candidates.clear()
 

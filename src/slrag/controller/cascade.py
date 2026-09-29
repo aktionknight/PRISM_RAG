@@ -24,12 +24,30 @@ async def _do_tiebreak(prefix: str, session: ControllerState):
     timeout = aiohttp.ClientTimeout(total=config.get("llm_tiebreak_timeout_ms", 500) / 1000.0)
     
     try:
+        # Read configured model from synth.yaml
+        from pathlib import Path
+        import yaml
+        synth_path = Path(__file__).resolve().parents[3] / "config" / "synth.yaml"
+        model = "llama3.2:1b"
+        if synth_path.exists():
+            try:
+                with open(synth_path, "r", encoding="utf-8") as f:
+                    sc = yaml.safe_load(f) or {}
+                    model = sc.get("generator", {}).get("openai_compatible", {}).get("model", model)
+            except Exception:
+                pass
+
         async with aiohttp.ClientSession(timeout=timeout) as client:
             resp = await client.post(
-                "http://localhost:8000/v1/completions",
-                json={"prompt": f"Does '{prefix}' need search? Yes or No?", "max_tokens": 5}
+                "http://127.0.0.1:11434/v1/chat/completions",
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": f"Does '{prefix}' need search? Yes or No?"}],
+                    "max_tokens": 5,
+                },
             )
-            text = await resp.text()
+            data = await resp.json()
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             if "yes" in text.lower():
                 session.force_retrieve = True
                 logger.debug(f"LLM Tie-break resolved to RETRIEVE for prefix: '{prefix}'")
@@ -85,7 +103,7 @@ class RetrievalController:
             self.session.current_prefix = prefix[matches[-1].end():] if matches else ""
 
         # --- Stage 0: Suppression ---
-        decision = evaluate_suppression(prefix, t_s)
+        decision = evaluate_suppression(prefix, t_s, self.index_mock)
         if decision:
             self.session.last_decision = decision.decision
             return decision
