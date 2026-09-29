@@ -26,8 +26,8 @@ def detect_contradiction(new_chunk_text: str, current_drift: float) -> bool:
 def process_speculation(chunk_text: str, current_drift: float, session: ControllerState) -> None:
     """
     Manage the lifecycle of speculative branches.
-    If contradiction detected -> CANCEL and demote to pool.
-    If consistent -> CONFIRM (leave active).
+    If contradiction detected -> CANCEL and leave as speculative in pool.
+    If consistent -> CONFIRM (promote to confirmed state).
     """
     # Create a list of keys to safely iterate and delete
     active_branches = list(session.active_speculations.keys())
@@ -37,19 +37,7 @@ def process_speculation(chunk_text: str, current_drift: float, session: Controll
         
         if detect_contradiction(chunk_text, current_drift):
             # CANCEL
-            # Demote retrieved chunks to EvidencePool
-            for chunk_data in branch.get("retrieved_chunks", []):
-                if hasattr(session, 'session') and session.session is not None:
-                    from slrag.core.schemas import EvidencePoolEntry
-                    entry = EvidencePoolEntry(**chunk_data)
-                    entry.speculative = True
-                    session.session.add_evidence(entry)
-                else:
-                    session.evidence_pool.demote_to_pool(
-                        chunk_data["chunk_id"], 
-                        chunk_data
-                    )
-            # Remove branch
+            # Remove branch, chunks remain in pool with speculative=True
             del session.active_speculations[branch_id]
         else:
             # CONFIRM - promote to confirmed state
@@ -58,5 +46,6 @@ def process_speculation(chunk_text: str, current_drift: float, session: Controll
                 for chunk_data in branch.get("retrieved_chunks", []):
                     existing = session.session.evidence_pool.get(chunk_data["chunk_id"])
                     if existing:
+                        existing.speculative = False
                         existing.speculative = False
             del session.active_speculations[branch_id]
