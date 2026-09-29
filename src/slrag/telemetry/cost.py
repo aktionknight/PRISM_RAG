@@ -77,7 +77,7 @@ def load_pricing(path: Path | None = None) -> dict:
 def make_cost_accumulator(config: dict | None = None) -> CostAccumulator:
     """Create a cost accumulator with rates from config."""
     pricing = config or load_pricing()
-    rates = pricing.get("llm", {})
+    rates = pricing.get("models", {})
     acc = CostAccumulator()
     acc._rates = rates
     return acc

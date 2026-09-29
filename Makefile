@@ -24,11 +24,11 @@ replay:               ## golden replay through the harness
 	$(PYTHON) -m slrag.api.cli replay --stream ./bench/data/golden_example.jsonl --out ./runs/events.jsonl
 
 bench:                ## full benchmark suite
-	$(PYTHON) -m slrag.api.cli replay --stream ./bench/data/suite.jsonl --out ./runs/events.jsonl
-	$(PYTHON) -m slrag.api.cli score --run ./runs/events.jsonl --gold ./bench/data/gold.jsonl
+	$(PYTHON) -m slrag.api.cli replay --stream ./bench/data/golden_example.jsonl --out ./runs/events.jsonl
+	$(PYTHON) -m slrag.api.cli score --run ./runs/events.jsonl --gold ./bench/data/c4_gold.jsonl
 
 score:
-	$(PYTHON) -m slrag.api.cli score --run ./runs/events.jsonl --gold ./bench/data/gold.jsonl
+	$(PYTHON) -m slrag.api.cli score --run ./runs/events.jsonl --gold ./bench/data/c4_gold.jsonl
 
 test:
 	$(PYTHON) -m pytest -q

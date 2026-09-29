@@ -45,7 +45,7 @@ class Orchestrator:
         logger.info(f"Chunk at {chunk.t_s}s -> Controller: {decision} ({decision_result.reason})")
 
         # 2. Decompose and Retrieve if needed
-        if decision.decision == ControllerDecisionType.RETRIEVE:
+        if decision == ControllerDecisionType.RETRIEVE.value or decision == "RETRIEVE":
             # 2a. Decompose
             logger.info("Decomposing intent...")
             new_candidates = await self.decomposer.decompose(

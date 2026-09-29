@@ -52,6 +52,12 @@ class RetrievalController:
 
         current_time_ms = t_s * 1000
 
+        # --- Stage 0: Suppression ---
+        decision = evaluate_suppression(prefix, t_s)
+        if decision:
+            self.session.last_decision = decision.decision
+            return decision
+
         # --- Utterance End Safety ---
         if chunk.is_final:
              self.session.last_retrieve_time = current_time_ms
@@ -82,12 +88,6 @@ class RetrievalController:
              )
              self.session.last_decision = decision.decision
              return decision
-
-        # --- Stage 0: Suppression ---
-        decision = evaluate_suppression(prefix, t_s)
-        if decision:
-            self.session.last_decision = decision.decision
-            return decision
             
         # --- Stage 1: Content Floor ---
         decision = evaluate_content_floor(prefix, t_s)

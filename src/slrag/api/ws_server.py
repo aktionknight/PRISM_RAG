@@ -65,11 +65,30 @@ def get_retriever():
     global _RETRIEVER
     if _RETRIEVER is None:
         from slrag.retrieve.dense import DenseRetriever
+        from slrag.retrieve.sparse import SparseRetriever
+        from slrag.retrieve.rerank import Reranker
         from pathlib import Path
-        _RETRIEVER = DenseRetriever(
-            index_path=Path(".index/faiss"),
-            chunks_path=Path(".index/chunks.jsonl")
-        )
+        
+        class RetrievalStack:
+            def __init__(self):
+                self.dense = DenseRetriever(index_path=Path(".index/faiss"), chunks_path=Path(".index/chunks.jsonl"))
+                self.sparse = SparseRetriever(index_path=Path(".index/bm25"), chunks_path=Path(".index/chunks.jsonl"))
+                self.reranker = Reranker()
+                from slrag.synth.config import _load_yaml
+                self.config = _load_yaml(Path("config/retrieval.yaml"))
+                
+            async def search(self, intent):
+                import asyncio
+                sparse_res, dense_res = await asyncio.gather(
+                    self.sparse.search(intent.search_string, top_k=30),
+                    self.dense.search(intent.search_string, top_k=30)
+                )
+                from slrag.retrieve.rrf import apply_rrf
+                fused = apply_rrf(sparse_res, dense_res, intent.facet, self.config)
+                reranked = await self.reranker.rerank(intent.search_string, fused, top_k=8)
+                return reranked
+                
+        _RETRIEVER = RetrievalStack()
     return _RETRIEVER
 
 def reset_retriever():
@@ -358,7 +377,8 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
 
         # ── Retrieval: only for genuinely novel intents ──
         retrieval_start = time.perf_counter()
-        for intent in novel_intents:
+
+        async def _retrieve_and_pool(intent):
             # Determine trigger type per 02_SOLUTION_DESIGN
             if len(session.retrieval_events) == 0:
                 trigger = "provisional"
@@ -373,9 +393,10 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
             session.retrieval_events.append(retrieval_event)
 
             # Do actual retrieval and add to pool
-            from slrag.retrieve.pool import add_to_pool
             retriever = get_retriever()
-            retrieved_chunks = await retriever.search(intent.search_string, top_k=10)
+            retrieved_chunks = await retriever.search(intent)
+
+            from slrag.retrieve.pool import add_to_pool
             for chunk in retrieved_chunks:
                 add_to_pool(
                     session=session.state,
@@ -409,6 +430,10 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
                 record_retrieval(trigger, 0.0)
             except Exception:
                 pass
+
+        if novel_intents:
+            import asyncio
+            await asyncio.gather(*[_retrieve_and_pool(intent) for intent in novel_intents])
         # --- Overlap Merge (Anti-fragmentation) ---
         from slrag.decompose.overlap import OverlapMerger
         from slrag.core.schemas import RetrievedChunk
@@ -514,16 +539,36 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
 
     # ── Stage 3: Synthesis ──
     synthesis_telemetry = {}
-    from slrag.synth.engine import SynthesisEngine, TurnInput
+    if not hasattr(session, "engine") or session.engine is None:
+        from slrag.synth.engine import SynthesisEngine
+        session.engine = SynthesisEngine(session.session_id)
+    engine = session.engine
 
-    engine = SynthesisEngine(session.session_id)
     from slrag.retrieve.pool import get_pool_chunks_for_intent
-
-    turn_evidence = {
+    candidates_by_intent = {
         intent.intent_id: get_pool_chunks_for_intent(session.state, intent.intent_id, top_k=10)
         for intent in session.state.intent_set.values()
     }
+    
+    from pathlib import Path
+    from slrag.synth.config import _load_yaml
+    retrieval_config = _load_yaml(Path("config/retrieval.yaml"))
+    
+    from slrag.retrieve.quota import assemble_context
+    fused_context = assemble_context(candidates_by_intent, retrieval_config)
+    
+    from slrag.retrieve.contradiction import ContradictionGating
+    if not hasattr(session, "cg"):
+        session.cg = ContradictionGating()
+    
+    # Group chunks by intent for the SynthesisEngine
+    turn_evidence = {}
+    for chunk in fused_context.chunks:
+        for intent_id, chunks in candidates_by_intent.items():
+            if any(c.chunk_id == chunk.chunk_id for c in chunks):
+                turn_evidence.setdefault(intent_id, []).append(chunk)
 
+    from slrag.synth.engine import TurnInput
     turn = TurnInput(
         turn_id=session.turn_id,
         utterance=session.prefix,

@@ -274,6 +274,7 @@ def cmd_score(args: argparse.Namespace) -> None:
         exit_code = bench_main([
             "--run", str(run_path),
             "--gold", str(gold_path),
+            "--corpus", getattr(args, "corpus", "./corpus"),
         ])
         sys.exit(exit_code)
     except ImportError as e:
@@ -331,6 +332,7 @@ def main() -> None:
     p_score = subparsers.add_parser("score", help="Score a run against gold")
     p_score.add_argument("--run", required=True)
     p_score.add_argument("--gold", required=True)
+    p_score.add_argument("--corpus", default="./corpus")
     p_score.set_defaults(func=cmd_score)
 
     args = parser.parse_args()
