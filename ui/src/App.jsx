@@ -242,7 +242,7 @@ export default function App() {
           totalTokensCompletion: tel.total_tokens_completion || s.totalTokensCompletion,
           totalCost: tel.total_cost_usd || s.totalCost,
           synthesisLatency: tel.synthesis_latency_ms || 0,
-          llmCallsThisTurn: tel.total_llm_calls || 0,
+          llmCallsThisTurn: tel.llm_calls || 0,
         }));
         break;
       }

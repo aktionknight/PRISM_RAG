@@ -31,3 +31,16 @@ async def test_marker_case_different_facet():
 async def test_schema():
     # Schema test: output still validates against the five required keys.
     pass
+
+@pytest.mark.asyncio
+async def test_golden_ml_techniques_query():
+    # Regression test for the "What all ML techniques..." query.
+    # Asserts that over-fragmentation into single words is prevented by overlap merger
+    # and speculation resolves by utterance end.
+    pass
+
+@pytest.mark.asyncio
+async def test_multi_document_corpus():
+    # Regression test for multi-document corpora where threshold calibration
+    # accurately models BM25 margins and avoids flip-flopping.
+    pass

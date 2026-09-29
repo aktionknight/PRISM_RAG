@@ -3,6 +3,7 @@ from typing import Optional
 
 from slrag.core.schemas import ControllerDecision
 from slrag.core.config import get_controller_config
+from slrag.core.session import ControllerState
 
 # Lazy load spaCy model
 _nlp = None
@@ -82,10 +83,12 @@ def evaluate_content_floor(prefix: str, t_s: float) -> Optional[ControllerDecisi
     return None
 
 
-def evaluate_sentence_boundary(prefix: str, t_s: float) -> Optional[ControllerDecision]:
+def evaluate_sentence_boundary(prefix: str, t_s: float, session: ControllerState) -> Optional[ControllerDecision]:
     """
     Boundary Rule: A completed sentence with at least one content anchor
     triggers RETRIEVE regardless of the probe. Also triggers on clause-level conjunctions.
+    New rule: If a chunk contains a syntactically complete question/clause, and the controller
+    has been oscillating (WAIT after a previous RETRIEVE-eligible state), prefer RETRIEVE.
     """
     clean_prefix = prefix.strip()
     if not clean_prefix:
@@ -95,27 +98,50 @@ def evaluate_sentence_boundary(prefix: str, t_s: float) -> Optional[ControllerDe
     doc = nlp(clean_prefix)
     
     split_indices = []
+    has_subject = False
+    has_verb = False
+    
     for token in doc:
         if token.pos_ == "PUNCT" and token.text in {".", "?", "!"}:
             split_indices.append(token.i + 1)
         elif token.lemma_.lower() in {"and", "but", "or", "also", "plus"} and token.dep_ == "cc" and token.head.pos_ in {"VERB", "AUX"}:
             split_indices.append(token.i)
             
-    if not split_indices:
-        return None
+        if token.dep_ in {"nsubj", "nsubjpass", "csubj"}:
+            has_subject = True
+        if token.pos_ in {"VERB", "AUX"} and token.dep_ == "ROOT":
+            has_verb = True
+            
+    is_complete_clause = has_subject and has_verb
 
-    for idx in split_indices:
-        sentence_text = doc[:idx].text.strip()
-        anchors = count_content_anchors(sentence_text)
-        if anchors >= 1:
+    if split_indices:
+        for idx in split_indices:
+            sentence_text = doc[:idx].text.strip()
+            anchors = count_content_anchors(sentence_text)
+            if anchors >= 1:
+                return ControllerDecision(
+                    t_s=t_s,
+                    decision="RETRIEVE",
+                    reason="sentence_boundary",
+                    confidence=0.95,
+                    stage=1,
+                    stage_name="Stage 1: Sentence Boundary",
+                    margin=float(anchors),
+                    threshold=1.0,
+                )
+
+    # Floor rule for oscillation on complete clauses without punctuation
+    if is_complete_clause and count_content_anchors(clean_prefix) >= 1:
+        if getattr(session, "has_retrieved_this_intent", False) or getattr(session, "last_decision", "") == "RETRIEVE":
+            # Oscillating from a previous RETRIEVE state back to WAIT (handled by probe usually, but we bypass here)
             return ControllerDecision(
                 t_s=t_s,
                 decision="RETRIEVE",
                 reason="sentence_boundary",
-                confidence=0.95,
+                confidence=0.90,
                 stage=1,
-                stage_name="Stage 1: Sentence Boundary",
-                margin=float(anchors),
+                stage_name="Stage 1: Clause Oscillation",
+                margin=float(count_content_anchors(clean_prefix)),
                 threshold=1.0,
             )
 

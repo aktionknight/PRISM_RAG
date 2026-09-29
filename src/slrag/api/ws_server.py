@@ -409,6 +409,42 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
                 record_retrieval(trigger, 0.0)
             except Exception:
                 pass
+        # --- Overlap Merge (Anti-fragmentation) ---
+        from slrag.decompose.overlap import OverlapMerger
+        from slrag.core.schemas import RetrievedChunk
+        overlap_merger = OverlapMerger()
+        results_by_intent = {}
+        for entry in session.state.evidence_pool.values():
+            for i_id, score in entry.scores_by_subquery.items():
+                if i_id not in results_by_intent:
+                    results_by_intent[i_id] = []
+                results_by_intent[i_id].append(
+                    RetrievedChunk(
+                        chunk_id=entry.chunk_id, doc_id=entry.doc_id,
+                        section_id=entry.section_id, text=entry.text,
+                        score=score, citation_label=entry.citation_label
+                    )
+                )
+        for i_id in results_by_intent:
+            results_by_intent[i_id].sort(key=lambda x: x.score, reverse=True)
+
+        merged_pairs = overlap_merger.check_all_pairs(
+            session.state,
+            results_by_intent,
+            jaccard_threshold=0.7,
+        )
+        
+        # Update triggers to resolve speculation on merged intents
+        for kept_id, merged_id in merged_pairs:
+            kept_intent = session.state.intent_set.get(kept_id)
+            merged_intent = session.state.intent_set.get(merged_id)
+            for event in session.retrieval_events:
+                if kept_intent and event.get("query") == kept_intent.search_string:
+                    if event.get("trigger") == "provisional":
+                        event["trigger"] = "final_confirm"
+                if merged_intent and event.get("query") == merged_intent.search_string:
+                    if event.get("trigger") == "provisional":
+                        event["trigger"] = "final_confirm"
 
         retrieval_latency_ms = (time.perf_counter() - retrieval_start) * 1000
 
@@ -442,6 +478,11 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
     session.answer_version += 1
     t_s = session.chunks[-1]["t_s"] if session.chunks else 0.0
     synthesis_start = time.perf_counter()
+
+    # Resolve any remaining provisional events to CONFIRMED since utterance ended
+    for event in session.retrieval_events:
+        if event.get("trigger") == "provisional":
+            event["trigger"] = "final_confirm"
 
     # ── Telemetry: turn started ──
     await bus.emit(_emit_telemetry(
@@ -513,18 +554,20 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
             session.claims = [c.model_dump() for c in event.output.claims]
 
             # Extract telemetry from synthesis result
+            synthesis_telemetry = {}
             if event.output.telemetry:
                 tel = event.output.telemetry
                 synthesis_telemetry = {
                     "latency_ms": tel.latency_ms,
                     "tokens": tel.tokens,
                     "cost_usd": tel.cost_usd,
+                    "llm_calls": tel.llm_calls,
                 }
                 # Accumulate session totals
                 session.total_tokens_prompt += tel.tokens.get("prompt", 0)
                 session.total_tokens_completion += tel.tokens.get("completion", 0)
                 session.total_cost_usd += tel.cost_usd
-                session.total_llm_calls += 1
+                session.total_llm_calls += tel.llm_calls
 
             # Emit synthesis telemetry events
             for te in event.telemetry:

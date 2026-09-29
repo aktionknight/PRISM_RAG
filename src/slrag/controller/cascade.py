@@ -56,7 +56,7 @@ class RetrievalController:
         if chunk.is_final:
              self.session.last_retrieve_time = current_time_ms
              self.session.current_prefix = ""
-             return ControllerDecision(
+             decision = ControllerDecision(
                  t_s=t_s,
                  decision="RETRIEVE",
                  reason=ControllerReason.utterance_end_safety.value,
@@ -64,12 +64,14 @@ class RetrievalController:
                  stage=5,
                  stage_name="Safety: Utterance End",
              )
+             self.session.last_decision = decision.decision
+             return decision
 
         # --- Refractory Period Check ---
         refractory_ms = config.get("refractory_ms", 100.0)
         
         if (current_time_ms - self.session.last_retrieve_time) < refractory_ms:
-             return ControllerDecision(
+             decision = ControllerDecision(
                  t_s=t_s,
                  decision="WAIT",
                  reason=ControllerReason.refractory_suppressed.value,
@@ -78,26 +80,31 @@ class RetrievalController:
                  stage_name="Refractory Cooldown",
                  threshold=refractory_ms,
              )
+             self.session.last_decision = decision.decision
+             return decision
 
         # --- Stage 0: Suppression ---
         decision = evaluate_suppression(prefix, t_s)
         if decision:
+            self.session.last_decision = decision.decision
             return decision
             
         # --- Stage 1: Content Floor ---
         decision = evaluate_content_floor(prefix, t_s)
         if decision:
+            self.session.last_decision = decision.decision
             return decision
 
         # --- Stage 1.5: Sentence Boundary Rule ---
         # A completed sentence with at least one content anchor triggers RETRIEVE regardless of the probe.
-        boundary_decision = evaluate_sentence_boundary(prefix, t_s)
+        boundary_decision = evaluate_sentence_boundary(prefix, t_s, self.session)
         if boundary_decision:
             if boundary_decision.decision == "RETRIEVE":
                  self.session.last_retrieve_time = current_time_ms
                  import re
                  matches = list(re.finditer(r'([.?!][\'"»\)]?(?:\s+|$))|(?:\s+(and|but|or|also|plus)\s+)', prefix, flags=re.IGNORECASE))
                  self.session.current_prefix = prefix[matches[-1].end():] if matches else ""
+            self.session.last_decision = boundary_decision.decision
             return boundary_decision
             
         # --- Stage 2: Probe (Corpus-calibrated BM25) ---
@@ -108,6 +115,7 @@ class RetrievalController:
                  import re
                  matches = list(re.finditer(r'([.?!][\'"»\)]?(?:\s+|$))|(?:\s+(and|but|or|also|plus)\s+)', prefix, flags=re.IGNORECASE))
                  self.session.current_prefix = prefix[matches[-1].end():] if matches else ""
+            self.session.last_decision = decision.decision
             return decision
             
         # --- Stage 3: Stability ---
@@ -118,16 +126,19 @@ class RetrievalController:
                  import re
                  matches = list(re.finditer(r'([.?!][\'"»\)]?(?:\s+|$))|(?:\s+(and|but|or|also|plus)\s+)', prefix, flags=re.IGNORECASE))
                  self.session.current_prefix = prefix[matches[-1].end():] if matches else ""
+             self.session.last_decision = decision.decision
              return decision
               
         # --- Stage 4: Fallback ---
-        # Documented enum reason is intent_unstable (insufficient confidence is not in enum)
-        return ControllerDecision(
+        # Documented enum reason is llm_tiebreak for Stage 4
+        decision = ControllerDecision(
             t_s=t_s,
             decision="WAIT",
-            reason=ControllerReason.intent_unstable.value,
+            reason=ControllerReason.llm_tiebreak.value,
             confidence=0.5,
             stage=4,
-            stage_name="Stage 4: Fallback",
+            stage_name="Stage 4: Fallback (LLM Tie-Break)",
             threshold=round(float(config.get("epsilon", 0.15)), 4),
         )
+        self.session.last_decision = decision.decision
+        return decision

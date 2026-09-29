@@ -173,6 +173,7 @@ class TelemetrySummary(BaseModel):
     latency_ms: dict[str, float] = Field(default_factory=dict)
     tokens: dict[str, int] = Field(default_factory=dict)
     cost_usd: float = 0.0
+    llm_calls: int = 0
 
 
 class AnswerOutput(BaseModel):              # the 5 required keys + extensions — Sivansh renders this

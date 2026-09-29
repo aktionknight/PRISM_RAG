@@ -516,12 +516,32 @@ class SynthesisEngine:
             prompt = (
                 "You are an assistant. Rewrite the following facts into a single cohesive, "
                 "natural-sounding paragraph. Keep every citation marker EXACTLY as it appears "
-                "in the text (e.g. [Doc_1 §1]). Do not invent any new facts or drop any citations.\n\n"
+                "in the text (e.g. [Doc_1 §1]). "
+                "CRITICAL INSTRUCTIONS:\n"
+                "1. Place each citation marker immediately after the specific sentence or clause it supports.\n"
+                "2. DO NOT bundle all citations at the end of the paragraph.\n"
+                "3. Ensure punctuation follows the citation without a preceding space (e.g. '...text [Doc_1 §1].' NOT '...text [Doc_1 §1] .').\n"
+                "4. Do not invent any new facts or drop any citations.\n\n"
             ) + raw_answer
             try:
+                started_rewrite = time.perf_counter()
                 resp = await self.generator.client.complete(prompt)
                 if resp and resp.text:
                     raw_answer = resp.text
+                    # Add telemetry for the rewrite call
+                    from slrag.synth.types import GenerationUsage
+                    rewrite_usage = GenerationUsage(
+                        llm_calls=1,
+                        prompt_tokens=getattr(resp, "prompt_tokens", len(prompt.split())),
+                        completion_tokens=getattr(resp, "completion_tokens", len(raw_answer.split())),
+                        backend=self.generator.backend,
+                    )
+                    telemetry.add("generation_rewrite", _ms(started_rewrite), {
+                        "llm_calls": rewrite_usage.llm_calls,
+                        "prompt_tokens": rewrite_usage.prompt_tokens,
+                        "completion_tokens": rewrite_usage.completion_tokens,
+                        "backend": rewrite_usage.backend,
+                    })
             except Exception:
                 pass
 
@@ -534,6 +554,8 @@ class SynthesisEngine:
             uncertainty=uncertainty,
             sub_queries=sub_queries,
             retrieval_events=retrieval_events,
+            telemetry=telemetry.summary(),
+            graph=self.graph,
             config=self.config,
         )
         extensions = build_extensions(
@@ -628,7 +650,24 @@ class _Telemetry:
         )
 
     def summary(self) -> dict[str, Any]:
-        return {"latency_ms": {e.component: round(e.latency_ms, 3) for e in self.events}}
+        prompt_tokens = 0
+        completion_tokens = 0
+        llm_calls = 0
+        for e in self.events:
+            if "generation" in e.component or "render" in e.component:
+                prompt_tokens += e.payload.get("prompt_tokens", 0)
+                completion_tokens += e.payload.get("completion_tokens", 0)
+                llm_calls += e.payload.get("llm_calls", 0)
+        
+        # Simple cost calculation for local or general models ($0.50 / 1M prompt, $1.50 / 1M completion)
+        cost_usd = (prompt_tokens * 0.5 + completion_tokens * 1.5) / 1000000.0
+
+        return {
+            "latency_ms": {e.component: round(e.latency_ms, 3) for e in self.events},
+            "tokens": {"prompt": prompt_tokens, "completion": completion_tokens},
+            "cost_usd": cost_usd,
+            "llm_calls": llm_calls,
+        }
 
 
 def _ms(started: float) -> float:
