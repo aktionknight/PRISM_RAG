@@ -88,7 +88,7 @@ class Orchestrator:
                         )
                     self.intent_set.mark_dispatched(intent.intent_id)
 
-        return decision
+        return decision_result
 
     async def process_stream(self, stream: AsyncGenerator[TranscriptChunk, None]):
         """Process an entire stream of chunks."""

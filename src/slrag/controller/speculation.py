@@ -54,3 +54,9 @@ def process_speculation(chunk_text: str, current_drift: float, session: Controll
         else:
             # CONFIRM - promote to confirmed state
             branch["status"] = "confirmed"
+            if hasattr(session, 'session') and session.session is not None:
+                for chunk_data in branch.get("retrieved_chunks", []):
+                    existing = session.session.evidence_pool.get(chunk_data["chunk_id"])
+                    if existing:
+                        existing.speculative = False
+            del session.active_speculations[branch_id]

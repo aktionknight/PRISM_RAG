@@ -10,6 +10,31 @@ from slrag.controller.content_floor import evaluate_content_floor, evaluate_sent
 from slrag.controller.probe import evaluate_probe
 from slrag.controller.stability import evaluate_stability, _get_encoder, cosine_similarity
 from slrag.controller.speculation import process_speculation
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
+
+async def _do_tiebreak(prefix: str, session: ControllerState):
+    """Async background task for LLM tie-break."""
+    from slrag.core.config import get_controller_config
+    import aiohttp
+    
+    config = get_controller_config()
+    timeout = aiohttp.ClientTimeout(total=config.get("llm_tiebreak_timeout_ms", 500) / 1000.0)
+    
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as client:
+            resp = await client.post(
+                "http://localhost:8000/v1/completions",
+                json={"prompt": f"Does '{prefix}' need search? Yes or No?", "max_tokens": 5}
+            )
+            text = await resp.text()
+            if "yes" in text.lower():
+                session.force_retrieve = True
+                logger.debug(f"LLM Tie-break resolved to RETRIEVE for prefix: '{prefix}'")
+    except Exception as e:
+        logger.debug(f"LLM Tie-break failed or timed out: {e}")
 
 class RetrievalController:
     """
@@ -52,16 +77,38 @@ class RetrievalController:
 
         current_time_ms = t_s * 1000
 
+        def _on_retrieve():
+            self.session.last_retrieve_time = current_time_ms
+            self.session.last_embedding = current_emb
+            import re
+            matches = list(re.finditer(r'([.?!][\'"»\)]?(?:\s+|$))|(?:\s+(and|but|or|also|plus)\s+)', prefix, flags=re.IGNORECASE))
+            self.session.current_prefix = prefix[matches[-1].end():] if matches else ""
+
         # --- Stage 0: Suppression ---
         decision = evaluate_suppression(prefix, t_s)
         if decision:
             self.session.last_decision = decision.decision
             return decision
 
+        # --- Async Tie-Break Override ---
+        if getattr(self.session, 'force_retrieve', False):
+             self.session.force_retrieve = False
+             _on_retrieve()
+             decision = ControllerDecision(
+                 t_s=t_s,
+                 decision="RETRIEVE",
+                 reason=ControllerReason.llm_tiebreak.value,
+                 confidence=1.0,
+                 stage=4,
+                 stage_name="Stage 4: Fallback (LLM Tie-Break)",
+             )
+             self.session.last_decision = decision.decision
+             return decision
+
+
         # --- Utterance End Safety ---
         if chunk.is_final:
-             self.session.last_retrieve_time = current_time_ms
-             self.session.current_prefix = ""
+             _on_retrieve()
              decision = ControllerDecision(
                  t_s=t_s,
                  decision="RETRIEVE",
@@ -100,10 +147,7 @@ class RetrievalController:
         boundary_decision = evaluate_sentence_boundary(prefix, t_s, self.session)
         if boundary_decision:
             if boundary_decision.decision == "RETRIEVE":
-                 self.session.last_retrieve_time = current_time_ms
-                 import re
-                 matches = list(re.finditer(r'([.?!][\'"»\)]?(?:\s+|$))|(?:\s+(and|but|or|also|plus)\s+)', prefix, flags=re.IGNORECASE))
-                 self.session.current_prefix = prefix[matches[-1].end():] if matches else ""
+                 _on_retrieve()
             self.session.last_decision = boundary_decision.decision
             return boundary_decision
             
@@ -111,10 +155,7 @@ class RetrievalController:
         decision = evaluate_probe(prefix, t_s, self.index_mock)
         if decision:
             if decision.decision == "RETRIEVE":
-                 self.session.last_retrieve_time = current_time_ms
-                 import re
-                 matches = list(re.finditer(r'([.?!][\'"»\)]?(?:\s+|$))|(?:\s+(and|but|or|also|plus)\s+)', prefix, flags=re.IGNORECASE))
-                 self.session.current_prefix = prefix[matches[-1].end():] if matches else ""
+                 _on_retrieve()
             self.session.last_decision = decision.decision
             return decision
             
@@ -122,15 +163,18 @@ class RetrievalController:
         decision = evaluate_stability(prefix, t_s, self.session, self.encoder_mock)
         if decision:
              if decision.decision == "RETRIEVE":
-                 self.session.last_retrieve_time = current_time_ms
-                 import re
-                 matches = list(re.finditer(r'([.?!][\'"»\)]?(?:\s+|$))|(?:\s+(and|but|or|also|plus)\s+)', prefix, flags=re.IGNORECASE))
-                 self.session.current_prefix = prefix[matches[-1].end():] if matches else ""
+                 _on_retrieve()
              self.session.last_decision = decision.decision
              return decision
               
         # --- Stage 4: Fallback ---
-        # Documented enum reason is llm_tiebreak for Stage 4
+        # Kick off the async tie-break task. If it resolves to RETRIEVE, the next chunk will fire it.
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_do_tiebreak(prefix, self.session))
+        except RuntimeError:
+            pass # No running loop, just skip
+
         decision = ControllerDecision(
             t_s=t_s,
             decision="WAIT",

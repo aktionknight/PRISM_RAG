@@ -97,6 +97,8 @@ def score_citation_support(
     seen: set[tuple[str, str]] = set()
     judged: list[dict[str, Any]] = []
     for record in records:
+        if "output" not in record:
+            continue
         for claim in record["output"].get("claims", ()) or ():
             key = (str(record["session_id"]), str(claim["claim_id"]))
             if key in seen:
@@ -125,7 +127,7 @@ def score_g4(
     judge: Any,
     threshold: float,
 ) -> dict[str, Any]:
-    fabricated = {f"{r['session_id']}:{r['turn_id']}": ids for r in records if (ids := fabricated_ids(r, corpus))}
+    fabricated = {f"{r['session_id']}:{r['turn_id']}": ids for r in records if "output" in r and (ids := fabricated_ids(r, corpus))}
     support = score_citation_support(records, corpus, judge, threshold)
     return {"fabricated_id_count": sum(map(len, fabricated.values())), "fabricated": fabricated, **support}
 
@@ -158,6 +160,8 @@ def score_g5(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     presentation = {"turns": 0, "retrieval_events": 0, "citation_subset_violations": [], "version_changes": []}
     prior: dict[str, Mapping[str, Any]] = {}
     for record in records:
+        if "output" not in record:
+            continue
         session, output = str(record["session_id"]), record["output"]
         before = prior.get(session)
         report = _payload(record, "synthesis.refinement")

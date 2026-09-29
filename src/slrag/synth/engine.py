@@ -82,6 +82,7 @@ class TurnInput:
     evidence: Mapping[str, Sequence[RetrievedChunk]] = field(default_factory=dict)   # intent_id -> chunks
     retrieval_events: Sequence[dict] = ()
     controller_decisions: Sequence[ControllerDecision] = ()
+    contradictions: Sequence[dict] = ()
     # From SynthesisEngine.classify() at utterance end; None -> classified here.
     classification: TurnClassification | None = None
 
@@ -503,7 +504,7 @@ class SynthesisEngine:
             if self.graph.meta(claim.claim_id).intent_id
         }
         rows = self.coverage.build(intents, self._intent_evidence, active, claim_intents=claim_intents)
-        questions = list(dict.fromkeys([*self.coverage.clarifications(rows), *self._turn_questions]))
+        questions = list(dict.fromkeys([*self.coverage.clarifications(rows), *self._turn_questions, *turn.contradictions]))
         uncertainty = " ".join(part for part in (self.coverage.uncertainty_text(rows), *questions) if part)
         self._uncertainty = uncertainty
         telemetry.add("coverage", _ms(started), self.coverage.to_telemetry(rows))
@@ -650,23 +651,21 @@ class _Telemetry:
         )
 
     def summary(self) -> dict[str, Any]:
-        prompt_tokens = 0
-        completion_tokens = 0
-        llm_calls = 0
+        from slrag.telemetry.cost import make_cost_accumulator
+        acc = make_cost_accumulator()
         for e in self.events:
             if "generation" in e.component or "render" in e.component:
-                prompt_tokens += e.payload.get("prompt_tokens", 0)
-                completion_tokens += e.payload.get("completion_tokens", 0)
-                llm_calls += e.payload.get("llm_calls", 0)
-        
-        # Simple cost calculation for local or general models ($0.50 / 1M prompt, $1.50 / 1M completion)
-        cost_usd = (prompt_tokens * 0.5 + completion_tokens * 1.5) / 1000000.0
+                pt = e.payload.get("prompt_tokens", 0)
+                ct = e.payload.get("completion_tokens", 0)
+                if pt > 0 or ct > 0:
+                    acc.add_llm_call(pt, ct)
 
+        res = acc.summary()
         return {
             "latency_ms": {e.component: round(e.latency_ms, 3) for e in self.events},
-            "tokens": {"prompt": prompt_tokens, "completion": completion_tokens},
-            "cost_usd": cost_usd,
-            "llm_calls": llm_calls,
+            "tokens": res["tokens"],
+            "cost_usd": res["cost_usd"],
+            "llm_calls": res["llm_calls"],
         }
 
 

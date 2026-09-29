@@ -216,6 +216,7 @@ class ControllerState:
         self.current_prefix: str = ""
         self.last_embedding = None
         self.last_retrieve_time: float = -1000.0  # Allow immediate first retrieval
+        self.force_retrieve: bool = False
         
     def clear(self):
         """Destroy session state (HC-4)."""
@@ -224,6 +225,7 @@ class ControllerState:
         self.current_prefix = ""
         self.last_embedding = None
         self.last_retrieve_time = -1000.0
+        self.force_retrieve = False
 
 
 # ---------------------------------------------------------------------------

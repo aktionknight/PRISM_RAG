@@ -65,16 +65,69 @@ def cmd_replay(args: argparse.Namespace) -> None:
                 data = json.loads(line)
                 chunk = TranscriptChunk(**data)
                 
-                decision = await orchestrator.process_chunk(chunk)
-                events.append(decision.model_dump())
+                decision_result = await orchestrator.process_chunk(chunk)
+                
+        # ── End of turn Synthesis ──
+        # Gather evidence using quota
+        from slrag.retrieve.pool import get_pool_chunks_for_intent
+        from slrag.retrieve.quota import assemble_context
+        from slrag.synth.config import _load_yaml
         
-        # Call synthesis at the end (omitted for now since stubs are removed)
+        candidates_by_intent = {
+            intent.intent_id: get_pool_chunks_for_intent(orchestrator.session, intent.intent_id, top_k=10)
+            for intent in orchestrator.session.intent_set.values()
+        }
+        retrieval_config = _load_yaml(Path("config/retrieval.yaml"))
+        fused_context = assemble_context(candidates_by_intent, retrieval_config)
+        
+        turn_evidence = {}
+        for c in fused_context.chunks:
+            for intent_id, chunks in candidates_by_intent.items():
+                if any(cc.chunk_id == c.chunk_id for cc in chunks):
+                    turn_evidence.setdefault(intent_id, []).append(c)
+        
+        # Determine routing logic based on the last decision
+        from slrag.synth.engine import SynthesisEngine, TurnInput
+        from slrag.core.schemas import SubIntent
+        
+        engine = SynthesisEngine(orchestrator.session.session_id)
+        last_decision_str = orchestrator.session.controller.last_decision or "WAIT"
+        # We need a proper ControllerDecision list for the classification
+        controller_decisions = [decision_result] if decision_result else []
+        classification = engine.classify(orchestrator.prefix, controller_decisions)
+        
+        routed = TurnInput(
+            turn_id=0,
+            utterance=orchestrator.prefix,
+            t_s_end=0.0,
+            controller_decisions=controller_decisions,
+            classification=classification
+        )
+        if classification.needs_upstream_retrieval:
+            routed.sub_intents = [SubIntent(
+                intent_id=i.intent_id, 
+                facet=i.facet, 
+                search_string=i.search_string,
+                query_nl=i.query_nl
+            ) for i in orchestrator.session.intent_set.values()]
+            routed.evidence = turn_evidence
+            routed.retrieval_events = []
+            
+        result = await engine.handle_turn(routed)
+        events.append({
+            "session_id": orchestrator.session.session_id,
+            "turn_id": result.output.turn_id,
+            "turn_type": result.turn_type,
+            "output": result.to_json(),
+            "context_labels": sorted(engine.graph.known_labels()),
+            "telemetry": [event.model_dump(mode="json") for event in result.telemetry],
+        })
         
         out_path = Path(args.out)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with open(out_path, "w", encoding="utf-8") as f:
             for ev in events:
-                f.write(json.dumps(ev) + "\n")
+                f.write(json.dumps(ev, ensure_ascii=False) + "\n")
                 
         logger.info(f"Replay output written to {out_path}")
 

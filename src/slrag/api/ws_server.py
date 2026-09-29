@@ -203,6 +203,8 @@ class SessionManager:
         session = self.sessions.pop(session_id, None)
         if session:
             session.state.destroy()
+            if hasattr(session, 'engine') and session.engine is not None:
+                session.engine.destroy()
             return True
         return False
 
@@ -397,13 +399,27 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
             retrieved_chunks = await retriever.search(intent)
 
             from slrag.retrieve.pool import add_to_pool
+            is_speculative = (stage in (2, 3))
+            
+            branch_id = None
+            if is_speculative:
+                branch_id = f"spec_{uuid.uuid4().hex[:8]}"
+                session.state.controller.active_speculations[branch_id] = {
+                    "status": "pending",
+                    "retrieved_chunks": []
+                }
+                
             for chunk in retrieved_chunks:
+                if is_speculative:
+                    session.state.controller.active_speculations[branch_id]["retrieved_chunks"].append(
+                        chunk.model_dump()
+                    )
                 add_to_pool(
                     session=session.state,
                     chunk=chunk,
                     intent_id=intent.intent_id,
                     ts_stream_s=t_s,
-                    speculative=False
+                    speculative=is_speculative
                 )
 
             # Mark intent as dispatched
@@ -568,12 +584,26 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
             if any(c.chunk_id == chunk.chunk_id for c in chunks):
                 turn_evidence.setdefault(intent_id, []).append(chunk)
 
+    # Detect contradictions per facet
+    contradictions = []
+    for intent_id, chunks in turn_evidence.items():
+        intent = session.state.intent_set.get(intent_id)
+        facet = intent.facet if intent else None
+        res = await session.cg.detect_contradictions(chunks, facet)
+        for conflict in res:
+            vals_a, vals_b = conflict["values"]
+            slot = conflict["slot"]
+            contradictions.append(
+                f"Conflicting {slot} found for {facet}: {vals_a} vs {vals_b}."
+            )
+
     from slrag.synth.engine import TurnInput
     turn = TurnInput(
         turn_id=session.turn_id,
         utterance=session.prefix,
         t_s_end=t_s,
         sub_intents=tuple(getattr(session, 'current_candidates', [])),
+        contradictions=contradictions,
         retrieval_events=tuple(session.retrieval_events),
         evidence=turn_evidence,
     )
