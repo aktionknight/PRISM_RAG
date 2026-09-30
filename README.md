@@ -1,8 +1,17 @@
+<img width="1917" height="912" alt="image" src="https://github.com/user-attachments/assets/9195d22c-7e85-467d-a7ca-29ca39d2d108" />
 # PRISM RAG: Streaming Live RAG System
 
 PRISM RAG (Streaming Live RAG) is a high-performance, real-time Retrieval-Augmented Generation engine designed for sub-second responsiveness, minimal LLM cost, and strictly verifiable provenance. 
 
 It treats incoming utterances as continuous event streams, allowing it to begin retrieval while the user is still speaking.
+
+## IMPORTANT NOTE : 
+
+DRIVE LINK FOR PPT + VIDEO (DEMO) : https://drive.google.com/drive/folders/1CRqfgGIXGbzIoco69SHwpMasvHCWhd5M?usp=sharing
+
+follow the instructions for Starting up, Recommended Ollama + atleast 4GB VRAM for local inference, best works with the integrated Qwen 7B model, change model preference in the Synth.yaml in slrag/ and change it in decomposer for the harcoded fallback
+
+Run the project with : .\start.ps1 (from project root) or follow steps in the README below
 
 ## Key Features
 
@@ -53,20 +62,16 @@ System behaviors, controller thresholds, and model endpoints are centralized in 
 
 ### Running the System
 
-**Method 1: Complete Evaluator Docker Stack (Recommended)**
-The easiest way to run the entire system ?" including the FastAPI Engine, Web UI, Prometheus, Grafana, and the Ollama LLM backend ?" is to use the provided Windows startup script.
+**Method 1: All-in-One Docker Container (Recommended)**
+The entire application (FastAPI Engine, React UI, and local Ollama LLM) can be built and run in a single, self-contained Docker container.
+```bash
+# Build the all-in-one image (this will download the Qwen2.5 7B model during build)
+docker build -t prism-rag .
 
-```powershell
-# Open PowerShell as Administrator (if required for Docker) and run:
-.\start.ps1
+# Run the container
+docker run -p 8000:8000 -p 11434:11434 -v ./corpus:/app/corpus -v ./config:/app/config prism-rag
 ```
-This single command will:
-1. Boot up the entire architecture via `docker-compose.yml`.
-2. Wait for the local Ollama LLM container to initialize.
-3. Automatically pull the required **Qwen 2.5 7B** model.
-4. Output the URLs for the Web UI (`localhost:8000`), Grafana (`localhost:3000`), and Prometheus (`localhost:9090`).
-
-*(Note: Grafana's default credentials are `admin` / `slrag`. Anonymous viewing is enabled by default).*
+The server and UI will be available at `http://localhost:8000`.
 
 **Method 2: Local Development Setup**
 If you prefer to run the components separately for development:
@@ -94,7 +99,10 @@ npm run dev
 
 ### Observability
 PRISM is equipped with a 100% trace-coverage invariant suite. Every chunk decision, retrieval event, and graph mutation is logged to `events.jsonl`.
-For a visual dashboard, the OpenTelemetry + Prometheus + Grafana stack is now bundled and starts automatically when using `.\start.ps1` or `docker compose up -d`.
+For a visual dashboard, an OpenTelemetry + Prometheus + Grafana stack is available:
+```bash
+docker compose --profile obs up -d
+```
 
 ## Documentation
 - `markdowns/globals/01_OBJECTIVES_AND_REQUIREMENTS.md`: The core requirements.
