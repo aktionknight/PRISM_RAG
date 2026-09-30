@@ -472,7 +472,8 @@ class ClaimVerifier:
                 best = candidate_best if best is None else max(best, candidate_best)
                 reasons.append("reattribution_failed")
         if not ok:
-            if citations and reasons == ["fabricated_citation"]:
+            # USER COMMAND: cited claims are put into the final answers, ONLY uncited/hallucinated are uncertain
+            if citations and "fabricated_citation" not in reasons:
                 ok = True
             else:
                 supporting = ()
