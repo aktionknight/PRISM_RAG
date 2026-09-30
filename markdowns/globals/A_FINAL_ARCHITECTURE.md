@@ -7,7 +7,7 @@
 
 ## 0. Design Statement
 
-The engine is a single async process that treats an utterance as an **event stream**, not a request. Retrieval-readiness is decided by asking the corpus, not the sentence. Answers are held as a **graph of claims**, not a string, so refinement is a graph mutation rather than a regeneration. Citations are drawn from a **closed allowlist**, so fabrication is structurally impossible rather than statistically rare. Exactly three LLM calls occur per turn in the worst case (decompose, synthesise, optional controller tie-break); every other stage is deterministic code or a small non-generative model. This satisfies HC-5 (parsimony) by construction and is stated explicitly in the brief.
+The engine is a single async process that treats an utterance as an **event stream**, not a request. Retrieval-readiness is decided by asking the corpus, not the sentence. Answers are held as a **graph of claims**, not a string, so refinement is a graph mutation rather than a regeneration. Citations are drawn from a **closed allowlist**, so fabrication is structurally impossible rather than statistically rare. LLM calls are used only when necessary per turn (decompose, synthesise, optional controller tie-break); every other stage is deterministic code or a small non-generative model. This satisfies HC-5 (parsimony).
 
 ```
 Incoming Stream: [Chunk 0.0s] → [Chunk 0.8s] → [Chunk 1.6s] → [Utterance End 2.1s]
@@ -348,7 +348,7 @@ The five required top-level keys, exact names and types, plus the additive field
 | HC-2 | No hardcoding | All prompts in `config/prompts/*.jinja`; all thresholds in `config/*.yaml`; index built by an explicit command, never shipped baked |
 | HC-3 | Rigorous grounding | Allowlist-constrained citation emission (§4.4) + coverage-matrix uncertainty (§4.6) |
 | HC-4 | Session-bound state | In-process, TTL-bound `IntentSet`/`EvidencePool`/`ClaimGraph`; no disk persistence; destroyed on session end |
-| HC-5 | Parsimony | Single process; ≤3 LLM calls per turn; no agent framework; no extra network-hop services; every component's latency/cost is measured and published |
+| HC-5 | Parsimony | Single process; minimized LLM calls per turn; no agent framework; no extra network-hop services; every component's latency/cost is measured and published |
 
 ---
 

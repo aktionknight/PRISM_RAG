@@ -18,7 +18,7 @@ G2 rewards early retrieval; P1 punishes noisy retrieval. These only conflict if 
 **Rule 3 — The answer is a data structure, not a string.**
 Everything hard in O3 (refine, don't restart), O4 (grounding), G5 (state continuity), and G6 (version lineage) becomes easy once the answer is a **graph of Claims**, each carrying its own citations, facet, preconditions, and version. Rendering to prose is the last step, and it is the only step that needs a language model. Teams that store answers as strings will fight the refinement requirement for the entire hackathon.
 
-**A note on HC-5 (parsimony):** the design below uses **exactly three LLM calls per turn in the worst case** (decompose, synthesise, and an optional controller tie-break), plus small encoder models. No agent framework, no orchestration mesh, one process. Everything else is deterministic code and index lookups. State this explicitly in the architecture brief — it is a scored criterion, and most competing submissions will fail it.
+**A note on HC-5 (parsimony):** the design below uses **minimal LLM calls per turn** (decompose, synthesise, and an optional controller tie-break), plus small encoder models. No agent framework, no orchestration mesh, one process. Everything else is deterministic code and index lookups. State this explicitly in the architecture brief — it is a scored criterion, and most competing submissions will fail it.
 
 ---
 

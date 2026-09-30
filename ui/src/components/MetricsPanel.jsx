@@ -122,8 +122,6 @@ export default function MetricsPanel({ telemetryData, sessionStats }) {
         <MetricRow
           label="LLM Calls per Turn"
           value={`${stats.llmCallsThisTurn || 0}`}
-          target="≤3"
-          status={(stats.llmCallsThisTurn || 0) <= 3 ? 'pass' : 'fail'}
         />
       </MetricCard>
 

@@ -182,7 +182,6 @@ class OpenAICompatibleClient:
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
-            "options": {"num_gpu": 99},
         }
         if stream:
             body["stream"] = True
