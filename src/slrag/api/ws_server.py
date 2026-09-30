@@ -167,6 +167,7 @@ class PipelineSession:
     total_tokens_completion: int = 0
     total_cost_usd: float = 0.0
     total_llm_calls: int = 0
+    active_tasks: set[asyncio.Task] = field(default_factory=set)
 
     @property
     def decomposer(self):
@@ -244,6 +245,23 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
     t_s = chunk_data.get("t_s", 0.0)
     text = chunk_data.get("text", "")
     is_final = chunk_data.get("is_final", False)
+
+    if not session.chunks:
+        session.turn_id = session.state.new_turn()
+        await bus.emit(_emit_telemetry(
+            session_id=session.session_id,
+            turn_id=session.turn_id,
+            ts_stream_s=t_s,
+            component="orchestrator",
+            event_type=EVT_TURN_STARTED,
+            payload={
+                "turn_id": session.turn_id,
+                "answer_version": session.answer_version,
+                "prefix_len": len(session.prefix),
+                "retrieval_events_count": len(session.retrieval_events),
+                "sub_queries_count": len(session.sub_queries),
+            },
+        ))
 
     session.prefix += text
     chunk = TranscriptChunk(t_s=t_s, text=text, is_final=is_final)
@@ -563,8 +581,6 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
     await _process_chunk(session, {"t_s": t_s, "text": "", "is_final": True}, ws)
 
     bus = get_bus()
-    session.turn_id += 1
-    # Do not blindly increment answer_version here; it comes from the engine graph
     
     synthesis_start = time.perf_counter()
 
@@ -572,22 +588,6 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
     for event in session.retrieval_events:
         if event.get("trigger") == "provisional":
             event["trigger"] = "final_confirm"
-
-    # ── Telemetry: turn started ──
-    await bus.emit(_emit_telemetry(
-        session_id=session.session_id,
-        turn_id=session.turn_id,
-        ts_stream_s=t_s,
-        component="orchestrator",
-        event_type=EVT_TURN_STARTED,
-        payload={
-            "turn_id": session.turn_id,
-            "answer_version": session.answer_version,
-            "prefix_len": len(session.prefix),
-            "retrieval_events_count": len(session.retrieval_events),
-            "sub_queries_count": len(session.sub_queries),
-        },
-    ))
 
     await ws.send_json({"type": "synthesis_started", "turn_id": session.turn_id})
 
@@ -826,13 +826,28 @@ async def websocket_session(ws: WebSocket):
     bus = get_bus()
 
     # Register WebSocket as a telemetry broadcast target
+    queue = asyncio.Queue(maxsize=100)
+
     async def ws_broadcast(payload: dict) -> None:
         try:
-            await ws.send_json(payload)
-        except Exception:
+            queue.put_nowait(payload)
+        except asyncio.QueueFull:
             pass
 
-    bus.subscribe_ws(ws_broadcast)
+    async def queue_worker():
+        while True:
+            try:
+                payload = await queue.get()
+                await ws.send_json(payload)
+                queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                pass
+                
+    worker_task = asyncio.create_task(queue_worker())
+
+    bus.subscribe_ws(session.session_id, ws_broadcast)
 
     # ── Telemetry: session started ──
     await bus.emit(_emit_telemetry(
@@ -878,8 +893,10 @@ async def websocket_session(ws: WebSocket):
                     event_type=EVT_SESSION_ENDED,
                     payload={"session_id": session.session_id},
                 ))
+                bus.unsubscribe_ws(session.session_id, ws_broadcast)
                 mgr.end(session.session_id)
                 session = mgr.create()
+                bus.subscribe_ws(session.session_id, ws_broadcast)
                 reset_retriever()
                 # New session telemetry
                 await bus.emit(_emit_telemetry(
@@ -918,5 +935,6 @@ async def websocket_session(ws: WebSocket):
     except Exception:
         logger.exception(f"WebSocket error: {session.session_id}")
     finally:
-        bus.unsubscribe_ws(ws_broadcast)
+        worker_task.cancel()
+        bus.unsubscribe_ws(session.session_id, ws_broadcast)
         mgr.end(session.session_id)

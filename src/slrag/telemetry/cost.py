@@ -47,8 +47,8 @@ class CostAccumulator:
         return self._compute_cost(self.prompt_tokens, self.completion_tokens)
 
     def _compute_cost(self, prompt: int, completion: int) -> float:
-        prompt_rate = self._rates.get("prompt_per_1k", 0.0) / 1000.0
-        completion_rate = self._rates.get("completion_per_1k", 0.0) / 1000.0
+        prompt_rate = self._rates.get("prompt_per_1k_tokens", 0.0) / 1000.0
+        completion_rate = self._rates.get("completion_per_1k_tokens", 0.0) / 1000.0
         return prompt * prompt_rate + completion * completion_rate
 
     def summary(self) -> dict[str, Any]:
@@ -77,7 +77,11 @@ def load_pricing(path: Path | None = None) -> dict:
 def make_cost_accumulator(config: dict | None = None) -> CostAccumulator:
     """Create a cost accumulator with rates from config."""
     pricing = config or load_pricing()
-    rates = pricing.get("models", {})
+    models = pricing.get("models", {})
+    rates = {}
+    if models:
+        # F12: Fix nested config loading by taking the first model's rates or matching
+        rates = next(iter(models.values()))
     acc = CostAccumulator()
     acc._rates = rates
     return acc

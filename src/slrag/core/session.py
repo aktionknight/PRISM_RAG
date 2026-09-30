@@ -258,6 +258,9 @@ class SessionState:
     claims: list[Claim] = field(default_factory=list)
     version_lineage: list[VersionLineage] = field(default_factory=list)
 
+    # ── Shared Ledger (F13 Fix) ──
+    turn_llm_calls: int = 0
+
     # ── Previous prefix embedding for drift detection ──
     prev_prefix_embedding: Optional[list[float]] = None
 
@@ -284,6 +287,7 @@ class SessionState:
     def new_turn(self) -> int:
         """Advance the turn counter and return the new turn_id."""
         self.turn_id += 1
+        self.turn_llm_calls = 0
         return self.turn_id
 
     def new_version(self) -> int:

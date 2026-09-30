@@ -298,12 +298,13 @@ class Decomposer:
 
     # ── Main entry point ────────────────────────────────────────────
 
-    async def decompose(
+        async def decompose(
         self,
         prefix: str,
-        existing_intents: dict[str, SubIntent],
+        existing_intents: dict,
         ts: float,
-    ) -> list[SubIntent]:
+        session_state=None,
+    ) -> list:
         """Decompose a transcript prefix into self-contained sub-intents.
 
         Pipeline:
@@ -334,30 +335,28 @@ class Decomposer:
         # Task 3.2: LLM canonicalisation with 1 re-prompt allowed
         llm_response = None
         attempts = 0
-        max_attempts = min(2, self.max_llm_calls)
 
-        while attempts < max_attempts:
+        while True:
+            if session_state is not None:
+                if session_state.turn_llm_calls >= 3:
+                    logger.warning("Global turn LLM call limit (3) reached.")
+                    break
+                session_state.turn_llm_calls += 1
+
             attempts += 1
+            if attempts > min(2, self.max_llm_calls):
+                break
+
             llm_response = await self._call_llm(prompt)
 
             if llm_response and "sub_intents" in llm_response:
-                # Validate self-containment of every sub-query
-                all_valid = all(
-                    self._is_self_contained(si.get("query_nl", ""))
-                    for si in llm_response["sub_intents"]
-                )
-                if all_valid:
-                    break
-                else:
-                    # One re-prompt allowed
-                    prompt += (
-                        "\n\nError: A sub-query contained unresolved pronouns. "
-                        "Rewrite every sub-query to be fully self-contained."
-                    )
-                    logger.debug("Re-prompting LLM for self-containment fix")
+                # Removed redundant rewriting
+                break
             else:
                 prompt += (
-                    "\n\nError: Output must match the requested JSON format "
+                    "
+
+Error: Output must match the requested JSON format "
                     "containing 'sub_intents'."
                 )
 

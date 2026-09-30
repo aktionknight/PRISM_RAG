@@ -16,6 +16,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 async def _do_tiebreak(prefix: str, session: ControllerState):
+    if hasattr(session, 'session') and hasattr(session.session, 'turn_llm_calls'):
+        if session.session.turn_llm_calls >= 3:
+            logger.debug("Tie-break skipped due to turn_llm_calls >= 3")
+            return
+        session.session.turn_llm_calls += 1
+
     """Async background task for LLM tie-break."""
     from slrag.core.config import get_controller_config
     import aiohttp
@@ -44,7 +50,6 @@ async def _do_tiebreak(prefix: str, session: ControllerState):
                     "model": model,
                     "messages": [{"role": "user", "content": f"Does '{prefix}' need search? Yes or No?"}],
                     "max_tokens": 5,
-                    "options": {"num_gpu": 99},
                 },
             )
             data = await resp.json()
