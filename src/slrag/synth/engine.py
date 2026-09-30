@@ -513,38 +513,7 @@ class SynthesisEngine:
 
         citations = answer_citations(display_active)
         raw_answer = render_claims(display_active, config=self.config)
-        if display_active and hasattr(self.generator, "client") and self.generator.client:
-            prompt = (
-                "You are an assistant. Rewrite the following facts into a single cohesive, "
-                "natural-sounding paragraph. Keep every citation marker EXACTLY as it appears "
-                "in the text (e.g. [Doc_1 §1]). "
-                "CRITICAL INSTRUCTIONS:\n"
-                "1. Place each citation marker immediately after the specific sentence or clause it supports.\n"
-                "2. DO NOT bundle all citations at the end of the paragraph.\n"
-                "3. Ensure punctuation follows the citation without a preceding space (e.g. '...text [Doc_1 §1].' NOT '...text [Doc_1 §1] .').\n"
-                "4. Do not invent any new facts or drop any citations.\n\n"
-            ) + raw_answer
-            try:
-                started_rewrite = time.perf_counter()
-                resp = await self.generator.client.complete(prompt)
-                if resp and resp.text:
-                    raw_answer = resp.text
-                    # Add telemetry for the rewrite call
-                    from slrag.synth.types import GenerationUsage
-                    rewrite_usage = GenerationUsage(
-                        llm_calls=1,
-                        prompt_tokens=getattr(resp, "prompt_tokens", len(prompt.split())),
-                        completion_tokens=getattr(resp, "completion_tokens", len(raw_answer.split())),
-                        backend=self.generator.backend,
-                    )
-                    telemetry.add("generation_rewrite", _ms(started_rewrite), {
-                        "llm_calls": rewrite_usage.llm_calls,
-                        "prompt_tokens": rewrite_usage.prompt_tokens,
-                        "completion_tokens": rewrite_usage.completion_tokens,
-                        "backend": rewrite_usage.backend,
-                    })
-            except Exception:
-                pass
+
 
         output = build_answer_output(
             session_id=self.session_id,
