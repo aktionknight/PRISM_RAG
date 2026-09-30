@@ -16,8 +16,10 @@ def _get_encoder(encoder_mock: Any = None):
     global _encoder
     if _encoder is None:
         try:
+            import torch
             from sentence_transformers import SentenceTransformer
-            _encoder = SentenceTransformer("BAAI/bge-small-en-v1.5")
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            _encoder = SentenceTransformer("BAAI/bge-small-en-v1.5", device=device)
         except ImportError:
             # Fallback for tests
             class MockEncoder:

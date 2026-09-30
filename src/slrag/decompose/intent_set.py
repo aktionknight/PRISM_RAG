@@ -28,10 +28,12 @@ def _get_embedding_model(model_name: str):
     """Lazy load the sentence-transformers model."""
     global _EMBEDDING_MODEL
     if _EMBEDDING_MODEL is None:
-        logger.info(f"Loading embedding model: {model_name}")
+        import torch
         from sentence_transformers import SentenceTransformer
 
-        _EMBEDDING_MODEL = SentenceTransformer(model_name)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Loading embedding model on {device}: {model_name}")
+        _EMBEDDING_MODEL = SentenceTransformer(model_name, device=device)
     return _EMBEDDING_MODEL
 
 

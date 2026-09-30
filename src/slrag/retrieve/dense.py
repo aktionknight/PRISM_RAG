@@ -67,8 +67,10 @@ class DenseRetriever:
                 logger.warning(f"Chunks file not found at {self.chunks_path}")
 
             # Embedding model
-            self.model = SentenceTransformer(self.model_name)
-            logger.info(f"Embedding model loaded: {self.model_name}")
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            self.model = SentenceTransformer(self.model_name, device=device)
+            logger.info(f"Embedding model loaded on {device}: {self.model_name}")
 
         except Exception as e:
             logger.error(f"Failed to load dense index: {e}")

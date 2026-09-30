@@ -44,6 +44,7 @@ async def _do_tiebreak(prefix: str, session: ControllerState):
                     "model": model,
                     "messages": [{"role": "user", "content": f"Does '{prefix}' need search? Yes or No?"}],
                     "max_tokens": 5,
+                    "options": {"num_gpu": 99},
                 },
             )
             data = await resp.json()

@@ -225,6 +225,7 @@ class Decomposer:
             ],
             "response_format": {"type": "json_object"},
             "temperature": 0.1,
+            "options": {"num_gpu": 99},
         }
 
         try:

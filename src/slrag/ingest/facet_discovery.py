@@ -112,10 +112,12 @@ class FacetDiscoveryPipeline:
     def _get_model(self):
         """Lazy-load the sentence-transformer model."""
         if self._model is None:
+            import torch
             from sentence_transformers import SentenceTransformer
 
-            logger.info(f"Loading embedding model: {self.embedding_model_name}")
-            self._model = SentenceTransformer(self.embedding_model_name)
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"Loading embedding model on {device}: {self.embedding_model_name}")
+            self._model = SentenceTransformer(self.embedding_model_name, device=device)
         return self._model
 
     # ── Text extraction helper ───────────────────────────────────────

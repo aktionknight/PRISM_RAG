@@ -79,10 +79,12 @@ class FacetTagger:
 
         if HAS_SENTENCE_TRANSFORMERS:
             try:
+                import torch
+                device = "cuda" if torch.cuda.is_available() else "cpu"
                 logger.info(
-                    f"Loading embedding model {embedding_model_name} for facet tagging."
+                    f"Loading embedding model {embedding_model_name} on {device} for facet tagging."
                 )
-                self.encoder = SentenceTransformer(embedding_model_name)
+                self.encoder = SentenceTransformer(embedding_model_name, device=device)
                 
                 self.facet_embeddings = self.encoder.encode(
                     descriptions, convert_to_tensor=True

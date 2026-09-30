@@ -66,6 +66,7 @@ verifier:
   cross_encoder:
     model_path: models/nli-deberta-v3-small   # baked at build time; never lazily downloaded (G1)
     labels: [contradiction, entailment, neutral]   # checked against the model by scripts/bake_nli_model.py
+    device: cuda                      # Run NLI cross-encoder on GPU
     max_length: 256
     premise_window_sentences: 1       # also score each sentence of the chunk on its own; entailment = max
     entailment_threshold: 0.5         # NLI P(entail); bench/calibrate_nli.py: raw scorer flat over 0.25-0.95, 45/45 at 0.5

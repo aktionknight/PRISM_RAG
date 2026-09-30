@@ -167,9 +167,13 @@ class CrossEncoderNLIScorer:
             raise ValueError(f"verifier.cross_encoder.labels is missing {sorted(missing)}")
         self._entailment = labels.index("entailment")
         self._contradiction = labels.index("contradiction")
+        import torch
         from sentence_transformers import CrossEncoder  # lazy: optional heavy dependency
 
-        self._model = CrossEncoder(str(path), max_length=int(cfg.get("max_length", 256)))
+        device = cfg.get("device")
+        if not device:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._model = CrossEncoder(str(path), max_length=int(cfg.get("max_length", 256)), device=device)
         self._lock = threading.Lock()   # fast tokenizers are not safe under concurrent threads
         self._window = int(cfg.get("premise_window_sentences", 2))
 

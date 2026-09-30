@@ -75,14 +75,17 @@ class ContradictionGating:
     def _load_model(self) -> None:
         """Load the NLI pipeline for contradiction detection."""
         try:
+            import torch
             from transformers import pipeline
 
+            device = 0 if torch.cuda.is_available() else -1
             self.nli_pipeline = pipeline(
                 "text-classification",
                 model=self.model_name,
-                device=-1,  # CPU
+                device=device,
             )
-            logger.info(f"NLI model loaded: {self.model_name}")
+            device_str = "CUDA" if device == 0 else "CPU"
+            logger.info(f"NLI model loaded on {device_str}: {self.model_name}")
         except Exception as e:
             logger.warning(f"NLI model not available ({e}) — contradiction gating disabled")
 

@@ -63,9 +63,11 @@ class HybridIndexer:
     def _load_embedding_model(self):
         """Lazy-load the sentence transformer model."""
         if self.embedding_model is None:
+            import torch
             from sentence_transformers import SentenceTransformer
-            logger.info(f"Loading embedding model: {self.model_name}")
-            self.embedding_model = SentenceTransformer(self.model_name)
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            logger.info(f"Loading embedding model on {device}: {self.model_name}")
+            self.embedding_model = SentenceTransformer(self.model_name, device=device)
         return self.embedding_model
 
     def build_and_save(self, chunks: list[IngestChunk]) -> None:

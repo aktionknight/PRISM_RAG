@@ -39,10 +39,12 @@ contradiction:
 embedding:
   model_name: "BAAI/bge-small-en-v1.5"
   dimension: 384
+  device: "cuda"
 
 # Reranker model
 reranker:
   model_name: "BAAI/bge-reranker-base"
+  device: "cuda"
 
 # Index paths
 index:
