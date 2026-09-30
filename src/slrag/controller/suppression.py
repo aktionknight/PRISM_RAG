@@ -36,7 +36,8 @@ PRESENTATION_VOCABULARY = frozenset({
     "bullet", "points", "point", "translate", "tone", "reformat", "simplify",
     "elaborate", "expand", "shorter", "longer", "words", "word", "differently",
     "answer", "response", "table", "list", "summary", "terms", "term",
-    "sentence", "sentences", "paragraph", "paragraphs", "two", "three", "four", "five"
+    "sentence", "sentences", "paragraph", "paragraphs", "two", "three", "four", "five",
+    "findings", "finding", "results", "result"
 })
 
 _DOC_TERMS_CACHE: Optional[set[str]] = None
@@ -206,6 +207,8 @@ def evaluate_suppression(
         "what you said",
         "what you just said",
         "the above",
+        "your findings",
+        "your results",
     ]
     has_prior_ref = any(
         re.search(r"\b" + re.escape(ref) + r"\b", prefix_lower)
