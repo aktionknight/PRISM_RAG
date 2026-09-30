@@ -135,7 +135,6 @@ def create_app() -> FastAPI:
                     "model": model,
                     "messages": [{"role": "user", "content": "warmup"}],
                     "max_tokens": 1,
-                    "options": {"num_gpu": 99},
                 }
                 logger.info(f"Warming up Ollama LLM ({model})...")
                 async with session.post("http://127.0.0.1:11434/v1/chat/completions", json=payload, timeout=120) as resp:

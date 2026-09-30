@@ -27,6 +27,7 @@ dependencies = [
     "aiohttp>=3.9",
     # API
     "fastapi>=0.110",
+    "python-multipart>=0.0.9",
     "uvicorn[standard]>=0.27",
     "websockets>=12.0",
     # Telemetry (core — always on)

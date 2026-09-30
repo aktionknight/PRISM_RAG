@@ -215,7 +215,9 @@ def gate_failures(summary: Mapping[str, Any], *, min_support: float = G4_MIN_CIT
     if g4["fabricated_id_count"]:
         failures.append(f"G4 fabricated_id_count={g4['fabricated_id_count']} (must be 0): {g4['fabricated']}")
     rate = g4["citation_support_rate"]
-    if rate is not None and rate < min_support:
+    if rate is None:
+        failures.append("G4 citation_support_rate has no claims judged (missing denominator)")
+    elif rate < min_support:
         failures.append(f"G4 citation_support_rate={rate:.3f} < {min_support}")
     if g5["full_corpus_searches_on_refinement"]:
         failures.append(f"G5 full_corpus_searches_on_refinement={g5['full_corpus_searches_on_refinement']} (must be 0)")

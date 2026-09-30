@@ -34,6 +34,10 @@ COPY bench/ bench/
 COPY corpus/ corpus/
 COPY Makefile .
 
+# Initialize indexes
+RUN slrag index --corpus corpus --out .index
+RUN chmod -R 777 .index
+
 # Copy built UI from Stage 1
 COPY --from=ui-build /app/ui/dist /app/ui/dist
 

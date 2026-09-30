@@ -48,11 +48,11 @@ class MarkdownLoader:
 
         for filepath in sorted(self.corpus_dir.glob("**/*.md")):
             logger.info(f"Loading {filepath.name}")
-            sections.extend(self.load_file(filepath, seen_docs, seen_content_hashes))
+            sections.extend(self.load_file(filepath))
 
         for filepath in sorted(self.corpus_dir.glob("**/*.txt")):
             logger.info(f"Loading {filepath.name}")
-            sections.extend(self.load_file(filepath, seen_docs, seen_content_hashes))
+            sections.extend(self.load_file(filepath))
 
         logger.info(f"Loaded {len(sections)} sections from {self.corpus_dir}")
         return sections

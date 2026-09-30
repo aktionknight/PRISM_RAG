@@ -79,7 +79,7 @@ class ContradictionGate:
         return [r for n, r in enumerate(results) if n not in dropped], conflicts
 
     def conflicting(self, a: VerificationResult, b: VerificationResult) -> bool:
-        if not a.citations or not b.citations or _docs(a) & _docs(b):
+        if not a.citations or not b.citations:
             return False
         tokens_a = {t for t in content_tokens(a.text, self._stopwords) if not t[0].isdigit()}
         tokens_b = {t for t in content_tokens(b.text, self._stopwords) if not t[0].isdigit()}
@@ -88,8 +88,10 @@ class ContradictionGate:
         frame = len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
         if frame < self._overlap:
             return False
+        from slrag.synth.text import extract_proper_nouns
         numerals_a, numerals_b = set(extract_numerals(a.text)), set(extract_numerals(b.text))
-        return (numerals_a != numerals_b) or self._polarity.negated(a.text) != self._polarity.negated(b.text)
+        entities_a, entities_b = set(extract_proper_nouns(a.text)), set(extract_proper_nouns(b.text))
+        return (numerals_a != numerals_b) or (entities_a != entities_b) or self._polarity.negated(a.text) != self._polarity.negated(b.text)
 
     @staticmethod
     def _score(result: VerificationResult, scores: Mapping[str, float]) -> float:

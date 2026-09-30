@@ -17,7 +17,6 @@ services:
       - ./corpus:/app/corpus:ro
       - ./config:/app/config:ro
       - ./runs:/app/runs
-      - ./.index:/app/.index
     environment:
       - PYTHONUNBUFFERED=1
     command: >
