@@ -1,8 +1,17 @@
+<img width="1917" height="912" alt="image" src="https://github.com/user-attachments/assets/9195d22c-7e85-467d-a7ca-29ca39d2d108" />
 # PRISM RAG: Streaming Live RAG System
 
 PRISM RAG (Streaming Live RAG) is a high-performance, real-time Retrieval-Augmented Generation engine designed for sub-second responsiveness, minimal LLM cost, and strictly verifiable provenance. 
 
 It treats incoming utterances as continuous event streams, allowing it to begin retrieval while the user is still speaking.
+
+## IMPORTANT NOTE : 
+
+DRIVE LINK FOR PPT + VIDEO (DEMO) : https://drive.google.com/drive/folders/1CRqfgGIXGbzIoco69SHwpMasvHCWhd5M?usp=sharing
+
+follow the instructions for Starting up, Recommended Ollama + atleast 4GB VRAM for local inference, best works with the integrated Qwen 7B model, change model preference in the Synth.yaml in slrag/ and change it in decomposer for the harcoded fallback
+
+Run the project with : .\start.ps1 (from project root) or follow steps in the README below
 
 ## Key Features
 
