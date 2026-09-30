@@ -43,13 +43,16 @@ class MarkdownLoader:
             logger.warning(f"Corpus directory does not exist: {self.corpus_dir}")
             return sections
 
+        seen_docs = set()
+        seen_content_hashes = set()
+
         for filepath in sorted(self.corpus_dir.glob("**/*.md")):
             logger.info(f"Loading {filepath.name}")
-            sections.extend(self.load_file(filepath))
+            sections.extend(self.load_file(filepath, seen_docs, seen_content_hashes))
 
         for filepath in sorted(self.corpus_dir.glob("**/*.txt")):
             logger.info(f"Loading {filepath.name}")
-            sections.extend(self.load_file(filepath))
+            sections.extend(self.load_file(filepath, seen_docs, seen_content_hashes))
 
         logger.info(f"Loaded {len(sections)} sections from {self.corpus_dir}")
         return sections

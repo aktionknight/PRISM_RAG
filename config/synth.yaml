@@ -29,7 +29,7 @@ generator:
     temperature: 0.0
     max_tokens: 700
     timeout_s: 120
-    json_schema_mode: false            # S-6 layer 2: citations constrained to the allowlist enum
+    json_schema_mode: true             # S-6 layer 2: citations constrained to the allowlist enum
     allow_remote: false               # HC-1: refuse non-local endpoints unless explicitly overridden
     stream: true                      # SSE: each claim reaches the verifier as its JSON object closes (W-1)
     stream_usage: true                # ask for token usage in the final stream chunk (stream_options)

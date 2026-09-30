@@ -100,23 +100,43 @@ def assemble_context(
 
     # ── Phase 1: Guaranteed quota — 2 chunks per intent ──
     remainder_candidates: list[RetrievedChunk] = []
-
+    
     chunk_to_intents = {}
+    selected_chunk_ids = set()
+    
+    # Pre-map chunks to intents to assign shared coverage
     for intent_id, chunks in candidates_by_intent.items():
-        facet_coverage[intent_id] = 0
+        for chunk in chunks:
+            chunk_to_intents.setdefault(chunk.chunk_id, set()).add(intent_id)
+
+    for intent_id, chunks in candidates_by_intent.items():
+        facet_coverage.setdefault(intent_id, 0)
         added = 0
 
         for chunk in chunks:
-            chunk_to_intents.setdefault(chunk.chunk_id, []).append(intent_id)
-            if added < guaranteed:
-                tokens = _approx_token_count(chunk.text)
-                if total_tokens + tokens <= budget:
-                    selected_chunks.append(chunk)
-                    total_tokens += tokens
-                    facet_coverage[intent_id] += 1
-                    added += 1
-                else:
+            if added >= guaranteed:
+                if chunk.chunk_id not in selected_chunk_ids:
                     remainder_candidates.append(chunk)
+                continue
+                
+            if chunk.chunk_id in selected_chunk_ids:
+                facet_coverage[intent_id] += 1
+                added += 1
+                continue
+
+            tokens = _approx_token_count(chunk.text)
+            if tokens > budget:  # skip oversized
+                continue
+                
+            if total_tokens + tokens <= budget:
+                selected_chunks.append(chunk)
+                selected_chunk_ids.add(chunk.chunk_id)
+                total_tokens += tokens
+                # Assign shared coverage to all relevant intents
+                for shared_intent in chunk_to_intents.get(chunk.chunk_id, []):
+                    facet_coverage.setdefault(shared_intent, 0)
+                    facet_coverage[shared_intent] += 1
+                added += 1
             else:
                 remainder_candidates.append(chunk)
 

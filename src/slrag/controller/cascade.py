@@ -190,7 +190,8 @@ class RetrievalController:
         # Kick off the async tie-break task. If it resolves to RETRIEVE, the next chunk will fire it.
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(_do_tiebreak(prefix, self.session))
+            task = loop.create_task(_do_tiebreak(prefix, self.session))
+            self.session.tiebreak_task = task
         except RuntimeError:
             pass # No running loop, just skip
 
@@ -205,3 +206,14 @@ class RetrievalController:
         )
         self.session.last_decision = decision.decision
         return decision
+
+    def reset_turn(self) -> None:
+        """Reset per-turn state and cancel any background tasks (HC-4)."""
+        self.session.current_prefix = ""
+        self.session.last_embedding = None
+        self.session.force_retrieve = False
+        task = getattr(self.session, 'tiebreak_task', None)
+        if task and not task.done():
+            task.cancel()
+        self.session.tiebreak_task = None
+

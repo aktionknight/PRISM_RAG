@@ -557,10 +557,15 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
 
 async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> None:
     """Process utterance end — synthesize the answer."""
+    t_s = session.chunks[-1]["t_s"] if session.chunks else 0.0
+
+    # ── Explicit End-Turn Transition: Final Decision Safety Net ──
+    await _process_chunk(session, {"t_s": t_s, "text": "", "is_final": True}, ws)
+
     bus = get_bus()
     session.turn_id += 1
-    session.answer_version += 1
-    t_s = session.chunks[-1]["t_s"] if session.chunks else 0.0
+    # Do not blindly increment answer_version here; it comes from the engine graph
+    
     synthesis_start = time.perf_counter()
 
     # Resolve any remaining provisional events to CONFIRMED since utterance ended
@@ -673,6 +678,9 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
             session.citations = event.output.citations
             session.uncertainty = event.output.uncertainty
             session.claims = [c.model_dump() for c in event.output.claims]
+            session.answer_version = event.output.answer_version
+            session.suppression_reason = event.output.suppression_reason
+            session.lineage = event.output.version_lineage.to_dict() if event.output.version_lineage else (event.lineage.to_dict() if event.lineage else None)
 
             # Extract telemetry from synthesis result
             synthesis_telemetry = {}
@@ -741,6 +749,8 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
         "sub_queries": session.sub_queries,
         "claims": session.claims,
         "retrieval_events": session.retrieval_events,
+        "suppression": getattr(session, 'suppression_reason', None),
+        "lineage": getattr(session, 'lineage', None),
         # Telemetry data for the UI
         "telemetry": {
             **synthesis_telemetry,
@@ -790,8 +800,14 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
     session.controller_decisions.clear()
     session.retrieval_events.clear()
     session.sub_queries.clear()
-    session.state.controller.last_retrieve_time = -1000.0
-    session.state.controller.last_decision = ""
+    session.suppression_reason = None
+    session.lineage = None
+    
+    # Task cleanup and reset on controller
+    from slrag.controller.cascade import RetrievalController
+    controller = RetrievalController(session=session.state.controller)
+    controller.reset_turn()
+    
     session.state.controller.has_retrieved_this_intent = False
     if hasattr(session, 'current_candidates'):
         session.current_candidates.clear()

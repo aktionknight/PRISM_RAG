@@ -53,7 +53,7 @@ class StructureAwareChunker:
         self.max_tokens = max_tokens
         self.overlap_pct = overlap_pct
 
-    def chunk_section(self, section: DocumentSection) -> list[IngestChunk]:
+    def chunk_section(self, section: DocumentSection, start_ordinal: int = 0) -> tuple[list[IngestChunk], int]:
         """Chunk a single section into token-bounded segments with overlap."""
         words = section.text.split()
         if not words:
@@ -147,8 +147,12 @@ class StructureAwareChunker:
     def chunk_documents(self, sections: list[DocumentSection]) -> list[IngestChunk]:
         """Chunk all sections from all documents."""
         all_chunks: list[IngestChunk] = []
+        doc_ordinals: dict[str, int] = {}
         for section in sections:
-            all_chunks.extend(self.chunk_section(section))
+            start_ord = doc_ordinals.get(section.doc_id, 0)
+            chunks, next_ord = self.chunk_section(section, start_ord)
+            doc_ordinals[section.doc_id] = next_ord
+            all_chunks.extend(chunks)
 
         logger.info(
             f"Chunked {len(sections)} sections into {len(all_chunks)} chunks "

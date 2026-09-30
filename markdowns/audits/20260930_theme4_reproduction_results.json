@@ -1,0 +1,100 @@
+{
+  "unsupported_number": {
+    "ok": true,
+    "reasons": [
+      "copy_check_failed:900"
+    ],
+    "missing_values": [
+      "900"
+    ],
+    "fabricated": [],
+    "supporting_chunk_ids": [
+      "Doc_sensor#1#0"
+    ]
+  },
+  "mixed_fabricated_citation": {
+    "ok": true,
+    "reasons": [
+      "fabricated_citation"
+    ],
+    "missing_values": [],
+    "fabricated": [
+      "Doc_missing §9"
+    ],
+    "supporting_chunk_ids": [
+      "Doc_sensor#1#0"
+    ]
+  },
+  "unverified_rewrite": {
+    "answer": "The sensor limit is 900 volts [Doc_missing §9].",
+    "citations": [
+      "Doc_sensor §1"
+    ],
+    "claims": [
+      "The sensor limit is 12 volts."
+    ],
+    "fabricated_id_count": 0
+  },
+  "dedup_id_disconnect": {
+    "novel_count": 0,
+    "latest_candidate_id": "candidate-b",
+    "stored_ids": [
+      "01M3RS7JDZHTEB7VKE972EDRWJ"
+    ],
+    "candidate_evidence": 0,
+    "original_evidence": 1
+  },
+  "cancelled_evidence_selected": {
+    "active_branches": 0,
+    "speculative": true,
+    "selected_chunks": 1
+  },
+  "quota_duplicates_starve_intent": {
+    "chunk_ids": [
+      "Doc_alpha#1#0",
+      "Doc_alpha#1#0"
+    ],
+    "coverage": {
+      "i1": 1,
+      "i2": 1,
+      "i3": 0
+    },
+    "tokens": 266
+  },
+  "cross_session_broadcast": {
+    "a_received": 1,
+    "b_received": 1,
+    "b_saw_session": "A"
+  },
+  "pricing_schema_mismatch": {
+    "cost_for_1000_prompt_and_completion": 0.0
+  },
+  "empty_benchmark_passes": {
+    "turns": 0,
+    "citation_support_rate": null,
+    "refinements": 0,
+    "gate_failures": []
+  },
+  "citation_id_collision": {
+    "sections": [
+      "1",
+      "1"
+    ],
+    "chunk_ids": [
+      "collision#1#0",
+      "collision#1#0"
+    ]
+  },
+  "api_end_adapter": {
+    "engine_constructor_args": "call('audit-api')",
+    "controller_chunk_handler_calls": 0,
+    "sub_intents": 0,
+    "controller_prefix_after_turn": "unretrieved prefix from prior turn"
+  },
+  "api_refinement_upstream_retrieval": {
+    "actions_before_classification": [
+      "decompose",
+      "full-prefix retrieval"
+    ]
+  }
+}

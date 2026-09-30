@@ -223,7 +223,36 @@ class Decomposer:
                 },
                 {"role": "user", "content": prompt},
             ],
-            "response_format": {"type": "json_object"},
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "decomposition",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "sub_intents": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "facet": {"type": "string"},
+                                        "query_nl": {"type": "string"},
+                                        "search_string": {"type": "string"},
+                                        "novel": {"type": "boolean"},
+                                        "slots": {"type": "object"},
+                                        "supersedes": {"type": "array", "items": {"type": "string"}}
+                                    },
+                                    "required": ["facet", "query_nl", "search_string", "novel", "slots", "supersedes"],
+                                    "additionalProperties": False
+                                }
+                            }
+                        },
+                        "required": ["sub_intents"],
+                        "additionalProperties": False
+                    }
+                }
+            },
             "temperature": 0.1,
         }
 
