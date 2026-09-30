@@ -119,7 +119,7 @@ def get_pool_chunks_for_intent(
     scored: list[tuple[float, EvidencePoolEntry]] = []
     for entry in session.evidence_pool.values():
         score = entry.scores_by_subquery.get(intent_id, 0.0)
-        if score > 0:
+        if score > 0 and not entry.speculative:
             scored.append((score, entry))
 
     scored.sort(key=lambda x: x[0], reverse=True)

@@ -142,6 +142,9 @@ class IntentSet:
                                 continue
 
                             is_duplicate = True
+                            candidate.intent_id = existing_intent.intent_id
+                            candidate.novel = False
+                            candidate.status = existing_intent.status
                             logger.info(
                                 f"Intent deduplicated (sim={sim:.3f}): "
                                 f"'{candidate.search_string}' matches existing "

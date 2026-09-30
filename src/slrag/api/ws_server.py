@@ -316,6 +316,42 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
     session.controller_decisions.append(decision_event)
     await ws.send_json(decision_event)
 
+    # ── Stage 3: Synthesis Engine Init ──
+    if not hasattr(session, "engine") or session.engine is None:
+        from slrag.synth.engine import SynthesisEngine
+        
+        class PoolView:
+            def chunks(self):
+                from slrag.core.schemas import RetrievedChunk
+                for entry in session.state.evidence_pool.values():
+                    if not entry.speculative:
+                        yield RetrievedChunk(
+                            chunk_id=entry.chunk_id, doc_id=entry.doc_id,
+                            section_id=entry.section_id, text=entry.text,
+                            score=max(entry.scores_by_subquery.values()) if entry.scores_by_subquery else 0.0,
+                            citation_label=entry.citation_label
+                        )
+        
+        async def _retrieve_fn(intent):
+            retriever = get_retriever()
+            chunks = await retriever.search(intent)
+            from slrag.retrieve.pool import add_to_pool
+            for chunk in chunks:
+                add_to_pool(
+                    session=session.state,
+                    chunk=chunk,
+                    intent_id=intent.intent_id,
+                    ts_stream_s=time.time(),
+                    speculative=False
+                )
+            return chunks
+
+        session.engine = SynthesisEngine(
+            session.session_id,
+            retrieve_fn=_retrieve_fn,
+            pool=PoolView()
+        )
+
     # ── Stage 2: Decompose + Retrieve on RETRIEVE ──
     if decision == ControllerDecisionType.RETRIEVE or decision == "RETRIEVE":
         await ws.send_json({"type": "retrieval_started", "t_s": t_s})
@@ -365,6 +401,12 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
         # Store current candidates for the synthesis engine later
         session.current_candidates = all_candidates
         session.sub_queries = list(dict.fromkeys(intent.query_nl for intent in all_candidates))
+
+        session.classification = session.engine.classify(
+            utterance=session.prefix,
+            controller_decisions=session.controller_decisions,
+            sub_intents=all_candidates
+        )
 
         await ws.send_json({
             "type": "subqueries_updated",
@@ -447,7 +489,7 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
             except Exception:
                 pass
 
-        if novel_intents:
+        if novel_intents and session.classification.turn_type != "CONSTRAINT_REFINEMENT":
             import asyncio
             await asyncio.gather(*[_retrieve_and_pool(intent) for intent in novel_intents])
         # --- Overlap Merge (Anti-fragmentation) ---
@@ -477,6 +519,7 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
         
         # Update triggers to resolve speculation on merged intents
         for kept_id, merged_id in merged_pairs:
+            session.intent_set.mark_merged(merged_id, kept_id)
             kept_intent = session.state.intent_set.get(kept_id)
             merged_intent = session.state.intent_set.get(merged_id)
             for event in session.retrieval_events:
@@ -561,9 +604,11 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
     engine = session.engine
 
     from slrag.retrieve.pool import get_pool_chunks_for_intent
+    from slrag.core.schemas import IntentStatus
     candidates_by_intent = {
         intent.intent_id: get_pool_chunks_for_intent(session.state, intent.intent_id, top_k=10)
         for intent in session.state.intent_set.values()
+        if intent.status not in (IntentStatus.merged, IntentStatus.superseded)
     }
     
     from pathlib import Path
@@ -606,6 +651,7 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
         contradictions=contradictions,
         retrieval_events=tuple(session.retrieval_events),
         evidence=turn_evidence,
+        classification=getattr(session, 'classification', None),
     )
 
     # Stream results
@@ -749,6 +795,8 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
     session.state.controller.has_retrieved_this_intent = False
     if hasattr(session, 'current_candidates'):
         session.current_candidates.clear()
+    if hasattr(session, 'classification'):
+        session.classification = None
 
 
 # ── WebSocket Endpoint ──────────────────────────────────────────────
