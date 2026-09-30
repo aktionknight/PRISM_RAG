@@ -77,6 +77,8 @@ class SparseRetriever:
                 results, scores = self.bm25.retrieve(
                     tokenized_query, corpus=self.chunks, k=actual_k
                 )
+                if len(results) == 0:
+                    return [], []
                 return results[0], scores[0]
 
             results, scores = await asyncio.to_thread(_do_search)
@@ -100,5 +102,6 @@ class SparseRetriever:
 
             return retrieved
         except Exception as e:
-            logger.error(f"BM25 search failed: {e}")
+            import traceback
+            logger.error(f"BM25 search failed: {e}\n{traceback.format_exc()}")
             return []

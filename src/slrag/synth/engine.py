@@ -213,8 +213,11 @@ class SynthesisEngine:
 
     # -- turn paths ------------------------------------------------------------
     async def _new_intent(self, turn: TurnInput, classification: TurnClassification, telemetry: _Telemetry):
+        # A new question has its own coverage; retain the session ClaimGraph for refinements.
+        self._intents.clear()
+        self._intent_evidence.clear()
         self.session_constraints = merge_constraints(
-            self.session_constraints, self.delta.extractor.extract(turn.utterance)
+            {}, self.delta.extractor.extract(turn.utterance)
         )
         evidence = {iid: list(chunks) for iid, chunks in turn.evidence.items()}
         for intent in turn.sub_intents:
@@ -235,6 +238,9 @@ class SynthesisEngine:
             yield event
 
         with self.graph.revise() as revision:
+            # Independent questions replace the current answer; history remains in the graph.
+            for prior in self.graph.active():
+                revision.supersede(prior.claim_id)
             for result in committed:
                 intent = self._intents.get(result.draft.intent_id or "")
                 facet = intent.facet if intent else result.draft.facet
@@ -512,7 +518,8 @@ class SynthesisEngine:
         display_active = list(active)
 
         citations = answer_citations(display_active)
-        raw_answer = render_claims(display_active, config=self.config)
+        presentation = parse_presentation_request(turn.utterance, self.config)
+        raw_answer = render_claims(display_active, style=presentation.style, config=self.config)
 
 
         output = build_answer_output(
@@ -616,6 +623,7 @@ class _Telemetry:
              "first_draft_ms": usage.first_draft_ms,
              "sentences": len(results), "committed": sum(r.ok for r in results),
              "retracted": sum(not r.ok for r in results),
+             "rejection_reasons": [list(r.reasons) for r in results if not r.ok],
              "fabricated_ids_stripped": verifier.fabricated_ids_stripped},
         )
 

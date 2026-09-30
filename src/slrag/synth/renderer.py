@@ -74,7 +74,8 @@ def render_claims(
         return separator.join(_sentence(claim) for group in groups for claim in group[:keep])
     if style in _LIST_STYLES:
         lines = []
-        for n, piece in enumerate(_distribute(groups, bullets), start=1):
+        pieces = [[claim] for claim in claims] if bullets is None else _distribute(groups, bullets)
+        for n, piece in enumerate(pieces, start=1):
             prefix = (
                 cfg.get("bullet_prefix", "- ")
                 if style == "bullets"

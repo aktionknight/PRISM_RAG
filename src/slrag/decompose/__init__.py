@@ -1,8 +1,11 @@
-"""Decomposition pipeline — intent set, decomposer, overlap merge, facets."""
+"""Decomposition exports; load model-dependent modules only when requested."""
+from importlib import import_module
 
-from .decomposer import Decomposer
-from .facets import FacetTagger
-from .intent_set import IntentSet
-from .overlap import OverlapMerger
+_EXPORTS = {"Decomposer": "decomposer", "FacetTagger": "facets",
+            "IntentSet": "intent_set", "OverlapMerger": "overlap"}
+__all__ = list(_EXPORTS)
 
-__all__ = ["Decomposer", "FacetTagger", "IntentSet", "OverlapMerger"]
+def __getattr__(name):
+    if name not in _EXPORTS:
+        raise AttributeError(name)
+    return getattr(import_module(f"slrag.decompose.{_EXPORTS[name]}"), name)

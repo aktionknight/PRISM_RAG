@@ -8,17 +8,18 @@ Given the current transcript prefix, decompose it into distinct, self-contained 
 ## Rules
 1. Each sub-query must be SELF-CONTAINED — resolve all pronouns, ellipsis, and anaphora.
 2. Assign each sub-query a FACET from: {{ facets | join(', ') }}
-3. Do NOT split tightly coupled concepts: two aspects of the same rule or item are ONE intent.
-4. DO split genuinely different information needs (e.g. distinct entities or disjoint topics).
+3. Separate each distinct requested output, even when the questions concern the same entity or facet. Enumeration and an explanation of purpose are separate information needs. Resolve references to the shared entity in every question.
+4. Do not split a noun phrase, synonyms, or descriptive modifiers into extra intents. Conjunctions introducing another request or question identify separate obligations; conjunctions within a name or noun phrase do not.
 5. Generate an optimised search_string for each sub-query (keywords, not a sentence).
-6. Emit a dictionary of extracted slots for constraints (e.g., {"attendees": 30}).
-7. Output the user's FINAL intended intent set for the full prefix. If an intent revises or corrects a previous intent from the "Already Identified Intents" list, include the ID of the old intent in the `supersedes` list.
+6. Emit only constraints explicitly stated by the user in slots. Never infer constraints.
+7. A facet is a label, not a reason to duplicate a query. Emit each distinct information need once, regardless of how many facets fit. Formatting instructions are not information needs. Output the user's FINAL intended intent set for the full prefix. If an intent revises or corrects a previous intent from the "Already Identified Intents" list, include the ID of the old intent in the `supersedes` list.
+8. Later corrections override earlier requests, including informal wording or typos. Omit withdrawn information needs entirely. The list is a complete snapshot of currently requested questions, not a list of additions to earlier snapshots. Distinct questions may share the same facet. Never preserve a question merely because it was already identified.
 
 ## Current Transcript Prefix
 {{ prefix }}
 
 {% if existing_intents %}
-## Already Identified Intents (do NOT duplicate these)
+## Already Identified Intents (reuse unchanged questions; supersede only explicit corrections)
 {% for intent in existing_intents %}
 - [{{ intent.facet }}] {{ intent.query_nl }} (ID: {{ intent.intent_id }})
 {% endfor %}

@@ -8,6 +8,7 @@ from slrag.controller.content_floor import count_content_anchors
 
 # Lazy load embedding model
 _encoder = None
+_UNSET = object()
 
 def _get_encoder(encoder_mock: Any = None):
     if encoder_mock is not None:
@@ -31,7 +32,7 @@ def _get_encoder(encoder_mock: Any = None):
 def cosine_similarity(a, b):
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
-def evaluate_stability(prefix: str, t_s: float, session: ControllerState, encoder_mock: Any = None) -> Optional[ControllerDecision]:
+def evaluate_stability(prefix: str, t_s: float, session: ControllerState, encoder_mock: Any = None, *, previous_embedding: Any = _UNSET, current_embedding: Any = None) -> Optional[ControllerDecision]:
     """
     Stage 3 — Embedding Stability.
     
@@ -47,11 +48,12 @@ def evaluate_stability(prefix: str, t_s: float, session: ControllerState, encode
     # Embed current prefix
     # Real implementation would use properly batched async encoding, but for the 
     # hackathon we'll use synchronous encoding on the single string.
-    current_emb = encoder.encode(prefix)
+    current_emb = current_embedding if current_embedding is not None else encoder.encode(prefix)
     
     # Compare with last embedding in session
-    if session.last_embedding is not None:
-        sim = cosine_similarity(current_emb, session.last_embedding)
+    previous = session.last_embedding if previous_embedding is _UNSET else previous_embedding
+    if previous is not None:
+        sim = cosine_similarity(current_emb, previous)
         drift = 1.0 - sim
         
         # Guard: Check if there is an unclosed self-correction in the active trailing clause

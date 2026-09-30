@@ -22,12 +22,16 @@ generator:
     synthesize: synthesize.jinja      # NEW_INTENT turns
     refine: refine.jinja              # CONSTRAINT_REFINEMENT delta synthesis
     present_only: present_only.jinja  # PRESENTATION_ONLY (optional LLM restyle)
-  openai_compatible:                  # Qwen2.5-7B-Instruct via local Ollama/vLLM (HC-1: local only)
+  openai_compatible:                  # Local instruct model via Ollama/vLLM (HC-1: local only)
     base_url: http://127.0.0.1:11434/v1
-    model: llama3.2:1b
+    model: qwen2.5:7b-instruct
     api_key_env: SLRAG_LLM_API_KEY    # optional; local Ollama needs none
     temperature: 0.0
-    max_tokens: 700
+    max_tokens: 1600
+    decomposition_max_tokens: 768     # Bound intent JSON output independently of answer output
+    claim_text_mode: abstractive        # Generate natural sentences, then verify each cited claim
+    max_claims_per_intent: 3            # bound structured output and repetition
+    evidence_candidates_per_intent: 8  # query-ranked source sentences for constrained selection
     timeout_s: 120
     json_schema_mode: true             # S-6 layer 2: citations constrained to the allowlist enum
     allow_remote: false               # HC-1: refuse non-local endpoints unless explicitly overridden
@@ -43,7 +47,7 @@ generator:
 # Verifier (synth/verifier.py) — S-6 allowlist backstop + S-5 two-pass streaming
 # ---------------------------------------------------------------------------
 verifier:
-  entailment_backend: lexical         # lexical | cross_encoder
+  entailment_backend: cross_encoder   # Semantic verification supports grounded paraphrases
   entailment_threshold: 0.6           # cited chunk |= sentence
   copy_check: true                    # numerals/dates/currency/entities must appear in a cited chunk
   reattribute_on_failure: true        # try other in-context chunks before retracting
@@ -132,7 +136,7 @@ presentation:
   styles:                              # verb -> render style; order matters (numbered before bullets)
     numbered: [numbered]
     bullets: [bullet, bullets, bulleted, list]
-    short: [shorten, shorter, summarise, summarize, condense, briefly]
+    short: [short, shorten, shorter, summarise, summarize, condense, briefly]
   reasons:                             # suppression_reason values (02_SOLUTION_DESIGN presentation enum)
     default: presentation_restructure
     translate: translation

@@ -1,6 +1,10 @@
 # Retrieval Controller — Tunable Thresholds
 # HC-2: No magic numbers in application code. All thresholds live here.
 # Calibrated via Phase 2 sweep (early-trigger-rate vs false-trigger-rate curve, knee selected).
+llm_tiebreak_enabled: false  # Reserve early decomposition, final reconciliation and synthesis calls
+exclusive_request_pattern: '\b(?:just|only)\s+(?P<request>(?:list|include|describe|explain|mention|show|give)\s+(?:(?:the|a|an)\s+)?(?P<object>[^.!?;]+))'
+withdrawal_patterns:
+  - '\b(?:do\s+not|don[\x27\u2019]?t)\s+(?:list|include|describe|explain|mention|show|give)\s+(?:(?:the|a|an)\s+)?(?P<object>[^.!?;]+)'
 
 # Stage 2 — BM25 Corpus Discriminativeness Probe
 tau_hi: 0.15          # margin above this → RETRIEVE (corpus is discriminative)
@@ -51,6 +55,11 @@ presentation_verbs:
   - "say that again"
   - "in other words"
   - "put it differently"
+presentation_reference_words: [describe, previous, last, short, brief, briefly, could]
+request_clause_boundary: '\b(?:and|also|plus)\s+(?=(?:what|why|how|where|when|which|who|list|identify|describe|explain|compare|name|show|give)\b)'
+request_prefix_pattern: '^\s*(?:list|identify|describe|explain|compare|name|show|give)\s+'
+request_pronoun_pattern: '\b(?:they|them|their|it|its)\b'
+intent_request_operators: [list, identify, describe, explain, compare, name, what, why, how, where, when, which, who]
 
 anaphora_patterns:
   - "that"

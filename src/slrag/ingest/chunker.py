@@ -150,8 +150,8 @@ class StructureAwareChunker:
         doc_ordinals: dict[str, int] = {}
         for section in sections:
             start_ord = doc_ordinals.get(section.doc_id, 0)
-            chunks, next_ord = self.chunk_section(section, start_ord)
-            doc_ordinals[section.doc_id] = next_ord
+            chunks = self.chunk_section(section, start_ord)
+            doc_ordinals[section.doc_id] = start_ord + len(chunks)
             all_chunks.extend(chunks)
 
         logger.info(

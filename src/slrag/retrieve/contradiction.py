@@ -153,13 +153,12 @@ class ContradictionGating:
         """Run NLI contradiction check between two texts.
 
         Returns:
-            Contradiction probability [0, 1]. Returns 1.0 if NLI model
-            is unavailable (fail-open: assume conflict for manual review).
+            Contradiction probability [0, 1]. Returns 0.0 if NLI is unavailable: differing numbers alone
+            do not establish a semantic contradiction.
         """
         if not self.nli_pipeline:
-            # Without NLI model, conservatively assume contradiction
-            # so it gets surfaced for review
-            return 1.0
+            # Numeric disagreement is only a candidate, not a confirmed conflict.
+            return 0.0
 
         try:
             def _run():

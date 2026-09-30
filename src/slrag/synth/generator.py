@@ -597,6 +597,8 @@ class LLMGenerator:
             "chunks": [{"label": label_for_chunk(chunk), "text": chunk.text} for chunk in chunks],
             "allowed_ids": allowed,
             "constraints": dict(constraints or {}),
+            "claim_text_mode": self.config["generator"]["openai_compatible"].get("claim_text_mode", "abstractive"),
+            "max_claims_per_intent": self.config["generator"]["openai_compatible"].get("max_claims_per_intent", 3),
         }
         if mode == "refine":
             ctx["retained_claims"] = [
@@ -616,18 +618,54 @@ class LLMGenerator:
         self.parse_errors = 0
         self.last_error = None
         intents = list(sub_intents)
+        retained_claims = list(retained_claims)
         prompt, allowed = self.render_prompt(
             intents, evidence, constraints=constraints, mode=mode, retained_claims=retained_claims
         )
         if not intents or not allowed:        # nothing to ground on: spend no call (coverage reports it)
             self.usage = GenerationUsage(backend=self.backend)
+            log.warning("Synthesis LLM skipped: intents=%d citation_labels=%d (no grounding evidence)", len(intents), len(allowed))
             return
+        log.info("Synthesis LLM starting: intents=%d evidence_labels=%d", len(intents), len(allowed))
         schema = claims_json_schema(allowed, [i.intent_id for i in intents]) if self.json_schema_mode else None
+        opts = self.config["generator"]["openai_compatible"]
+        if schema is not None:
+            claims_schema = schema["properties"]["claims"]
+            claims_schema["maxItems"] = len(intents) * int(opts.get("max_claims_per_intent", 3))
+            if opts.get("claim_text_mode") == "extractive":
+                sentences = list(dict.fromkeys(sentence for chunk in _context_chunks(evidence)
+                                               for sentence in split_sentences(chunk.text) if sentence.strip()))
+                if not sentences:
+                    self.usage = GenerationUsage(backend=self.backend)
+                    return
+                claims_schema["items"]["properties"]["text"] = {"type": "string", "enum": sentences}
+                # Couple each selectable statement to its actual source and intent.
+                # Raw reranker logits rank candidates; their sign is not a filter.
+                choices = []
+                stopwords = stopwords_from(self.config)
+                for intent in intents:
+                    query_words = set(content_tokens(intent.query_nl + " " + intent.search_string, stopwords))
+                    candidates = [(sentence, chunk) for chunk in evidence.get(intent.intent_id, ())
+                                  for sentence in split_sentences(chunk.text) if sentence.strip()]
+                    candidates.sort(key=lambda pair: (len(query_words & set(content_tokens(pair[0], stopwords))),
+                                                       pair[1].score), reverse=True)
+                    for sentence, chunk in candidates[:int(opts.get("evidence_candidates_per_intent", 8))]:
+                        choices.append({"type": "object", "properties": {
+                            "intent_id": {"const": intent.intent_id}, "facet": {"const": intent.facet},
+                            "text": {"const": sentence},
+                            "citations": {"const": [label_for_chunk(chunk)]}},
+                            "required": ["intent_id", "facet", "text", "citations"],
+                            "additionalProperties": False})
+                if choices:
+                    claims_schema["items"]["anyOf"] = choices
         scores = _label_scores(evidence)
         by_id = {intent.intent_id: intent for intent in intents}
         fallback = intents[0].facet if len(intents) == 1 else ""
-        async for draft in self._drafts(prompt, schema, by_id, fallback, scores):
+        excluded = [_claim_row(claim)["text"] for claim in retained_claims] if mode == "refine" else []
+        async for draft in self._drafts(prompt, schema, by_id, fallback, scores, excluded):
             yield draft
+        log.info("Synthesis LLM complete: calls=%d prompt_tokens=%d completion_tokens=%d parse_errors=%d error=%s",
+                 self.usage.llm_calls, self.usage.prompt_tokens, self.usage.completion_tokens, self.parse_errors, self.last_error)
 
     async def restyle(
         self, claims: Sequence[Claim | Mapping[str, Any]], instruction: str
@@ -658,14 +696,20 @@ class LLMGenerator:
         intents: Mapping[str, SubIntent],
         fallback_facet: str,
         scores: Mapping[str, float],
+        excluded_texts: Iterable[str] = (),
     ) -> AsyncIterator[DraftClaim]:
         """Drafts from the single LLM call, each yielded as soon as its claim object is complete."""
         seq = invalid = 0
+        seen = {_norm(text) for text in excluded_texts}
         async for item in self._items(prompt, schema):
             draft = _item_to_draft(item, seq, intents, fallback_facet, scores)
             if draft is None:
                 invalid += 1
                 continue
+            identity = _norm(draft.text)
+            if identity in seen:
+                continue
+            seen.add(identity)
             seq += 1
             yield draft
         self.parse_errors = self._source_broken + invalid

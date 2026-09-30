@@ -96,7 +96,7 @@ class BatchRAG:
         ]
 
         payload = {
-            "model": "qwen2.5",
+            "model": "qwen2.5:7b-instruct",
             "messages": messages,
             "temperature": 0.1,
             "stream": False,

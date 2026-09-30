@@ -10,6 +10,7 @@ producing two overlapping intents).
 from __future__ import annotations
 
 import logging
+import re
 
 from slrag.core.schemas import IntentStatus, RetrievedChunk
 from slrag.core.session import SessionState
@@ -55,8 +56,21 @@ class OverlapMerger:
         if not intent_a or not intent_b:
             return False
 
+        if any(i.status in (IntentStatus.merged, IntentStatus.superseded) for i in (intent_a, intent_b)):
+            return False
+        if any(intent_a.slots[k] != intent_b.slots[k] for k in intent_a.slots.keys() & intent_b.slots.keys()):
+            return False
+
         # Only merge intents that share the same facet
         if intent_a.facet != intent_b.facet:
+            return False
+
+        # Shared evidence does not establish identical information needs.
+        # Semantic deduplication belongs to IntentSet; merging here must preserve
+        # separate questions even when a small corpus returns the same passages.
+        def normalized(text):
+            return " ".join(re.findall(r"\w+", text.casefold()))
+        if normalized(intent_a.query_nl) != normalized(intent_b.query_nl):
             return False
 
         # Compute Jaccard on top-10 chunks
@@ -76,6 +90,13 @@ class OverlapMerger:
                 f"(Jaccard={jaccard:.2f}, facet={intent_a.facet})"
             )
             intent_b.status = IntentStatus.merged
+            intent_b.superseded_by = intent_a_id
+            for entry in session.evidence_pool.values():
+                if intent_b_id in entry.scores_by_subquery:
+                    entry.scores_by_subquery[intent_a_id] = max(
+                        entry.scores_by_subquery.get(intent_a_id, float('-inf')),
+                        entry.scores_by_subquery[intent_b_id],
+                    )
             return True
 
         return False

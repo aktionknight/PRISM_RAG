@@ -16,14 +16,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 async def _do_tiebreak(prefix: str, session: ControllerState):
+    if not get_controller_config().get("llm_tiebreak_enabled", False):
+        return
     if hasattr(session, 'session') and hasattr(session.session, 'turn_llm_calls'):
-        if session.session.turn_llm_calls >= 3:
-            logger.debug("Tie-break skipped due to turn_llm_calls >= 3")
+        if session.session.turn_llm_calls >= 1:
+            logger.debug("Tie-break skipped to reserve decomposition and synthesis calls")
             return
         session.session.turn_llm_calls += 1
 
     """Async background task for LLM tie-break."""
-    from slrag.core.config import get_controller_config
     import aiohttp
     
     config = get_controller_config()
@@ -34,18 +35,21 @@ async def _do_tiebreak(prefix: str, session: ControllerState):
         from pathlib import Path
         import yaml
         synth_path = Path(__file__).resolve().parents[3] / "config" / "synth.yaml"
-        model = "llama3.2:1b"
+        model = "qwen2.5:7b-instruct"
+        base_url = "http://127.0.0.1:11434/v1"
         if synth_path.exists():
             try:
                 with open(synth_path, "r", encoding="utf-8") as f:
                     sc = yaml.safe_load(f) or {}
-                    model = sc.get("generator", {}).get("openai_compatible", {}).get("model", model)
+                    llm_config = sc.get("generator", {}).get("openai_compatible", {})
+                    model = llm_config.get("model", model)
+                    base_url = llm_config.get("base_url", base_url)
             except Exception:
                 pass
 
         async with aiohttp.ClientSession(timeout=timeout) as client:
             resp = await client.post(
-                "http://127.0.0.1:11434/v1/chat/completions",
+                base_url.rstrip("/") + "/chat/completions",
                 json={
                     "model": model,
                     "messages": [{"role": "user", "content": f"Does '{prefix}' need search? Yes or No?"}],
@@ -54,7 +58,7 @@ async def _do_tiebreak(prefix: str, session: ControllerState):
             )
             data = await resp.json()
             text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            if "yes" in text.lower():
+            if "yes" in text.lower() and session.current_prefix == prefix:
                 session.force_retrieve = True
                 logger.debug(f"LLM Tie-break resolved to RETRIEVE for prefix: '{prefix}'")
     except Exception as e:
@@ -87,17 +91,25 @@ class RetrievalController:
         prefix = self.session.current_prefix
         t_s = chunk.t_s
         config = get_controller_config()
+        # Presentation-only turns need no embedding or corpus model initialization.
+        decision = evaluate_suppression(prefix, t_s, self.index_mock)
+        if decision:
+            self.session.last_decision = decision.decision
+            return decision
         
         # --- Stage -1: Speculation Checking ---
         # Calculate drift for speculation manager
         encoder = _get_encoder(self.encoder_mock)
-        current_emb = encoder.encode(chunk.text) # Embed just the new chunk text
+        previous_emb = self.session.last_embedding
+        current_emb = encoder.encode(prefix) if chunk.text.strip() else previous_emb
         drift = 0.0
-        if self.session.last_embedding is not None:
-             sim = cosine_similarity(current_emb, self.session.last_embedding)
+        if chunk.text.strip() and previous_emb is not None:
+             sim = cosine_similarity(current_emb, previous_emb)
              drift = 1.0 - sim
              
         process_speculation(chunk.text, drift, self.session)
+        # Sample every prefix, including WAIT paths, so stability compares consecutive prefixes.
+        self.session.last_embedding = current_emb
 
         current_time_ms = t_s * 1000
 
@@ -107,12 +119,6 @@ class RetrievalController:
             import re
             matches = list(re.finditer(r'([.?!][\'"»\)]?(?:\s+|$))|(?:\s+(and|but|or|also|plus)\s+)', prefix, flags=re.IGNORECASE))
             self.session.current_prefix = prefix[matches[-1].end():] if matches else ""
-
-        # --- Stage 0: Suppression ---
-        decision = evaluate_suppression(prefix, t_s, self.index_mock)
-        if decision:
-            self.session.last_decision = decision.decision
-            return decision
 
         # --- Async Tie-Break Override ---
         if getattr(self.session, 'force_retrieve', False):
@@ -184,7 +190,8 @@ class RetrievalController:
             return decision
             
         # --- Stage 3: Stability ---
-        decision = evaluate_stability(prefix, t_s, self.session, self.encoder_mock)
+        decision = evaluate_stability(prefix, t_s, self.session, self.encoder_mock,
+                                      previous_embedding=previous_emb, current_embedding=current_emb)
         if decision:
              if decision.decision == "RETRIEVE":
                  _on_retrieve()
@@ -195,8 +202,10 @@ class RetrievalController:
         # Kick off the async tie-break task. If it resolves to RETRIEVE, the next chunk will fire it.
         try:
             loop = asyncio.get_running_loop()
-            task = loop.create_task(_do_tiebreak(prefix, self.session))
-            self.session.tiebreak_task = task
+            pending = getattr(self.session, "tiebreak_task", None)
+            if pending is None or pending.done():
+                task = loop.create_task(_do_tiebreak(prefix, self.session))
+                self.session.tiebreak_task = task
         except RuntimeError:
             pass # No running loop, just skip
 
@@ -217,6 +226,9 @@ class RetrievalController:
         self.session.current_prefix = ""
         self.session.last_embedding = None
         self.session.force_retrieve = False
+        self.session.last_decision = "WAIT"
+        self.session.has_retrieved_this_intent = False
+        self.session.last_retrieve_time = float("-inf")
         task = getattr(self.session, 'tiebreak_task', None)
         if task and not task.done():
             task.cancel()

@@ -33,11 +33,50 @@ def _load_config() -> dict[str, Any]:
     return {}
 
 
+async def _warmup_llm(app: FastAPI) -> dict:
+    """Check the actual configured inference endpoint independently of NLP preload."""
+    import aiohttp
+    with open(_PROJECT_ROOT / "config" / "synth.yaml", encoding="utf-8") as f:
+        generator = (yaml.safe_load(f) or {}).get("generator", {})
+    cfg = generator.get("openai_compatible", {})
+    result = {"status": "warming", "model": cfg.get("model", ""),
+              "base_url": cfg.get("base_url", "")}
+    app.state.llm_status = result
+    if generator.get("backend") != "openai_compatible":
+        result["status"] = "disabled"
+        return result
+    logger.info("LLM warmup starting: model=%s endpoint=%s", result["model"], result["base_url"])
+    try:
+        import os
+        key = os.environ.get(cfg.get("api_key_env", "SLRAG_LLM_API_KEY"), "")
+        headers = {"Authorization": f"Bearer {key}"} if key else {}
+        async with aiohttp.ClientSession(headers=headers) as client:
+            async with client.post(result["base_url"].rstrip("/") + "/chat/completions",
+                    json={"model": result["model"], "messages": [{"role": "user", "content": "Reply OK."}],
+                          "max_tokens": 4, "stream": False},
+                    timeout=aiohttp.ClientTimeout(total=cfg.get("timeout_s", 120))) as response:
+                response.raise_for_status()
+                data = await response.json()
+                if not data.get("choices") or "error" in data:
+                    raise RuntimeError(str(data.get("error", "No completion choices returned")))
+        result["status"] = "ready"
+        logger.info("LLM warmup complete: model=%s endpoint=%s", result["model"], result["base_url"])
+    except Exception as exc:
+        result.update(status="error", error=f"{type(exc).__name__}: {exc}")
+        logger.error("LLM warmup failed: model=%s error=%s", result["model"], result["error"])
+    return result
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup / shutdown hooks."""
     from slrag.telemetry.bus import get_bus
     from slrag.telemetry.jsonl_sink import JSONLSink
+
+    application_logger = logging.getLogger("slrag")
+    if not application_logger.handlers and not logging.getLogger().handlers:
+        application_logger.addHandler(logging.StreamHandler())
+    application_logger.setLevel(logging.INFO)
 
     # Always-on JSONL sink
     sink = JSONLSink()
@@ -47,9 +86,14 @@ async def lifespan(app: FastAPI):
     app.state.jsonl_sink = sink
     app.state.config = _load_config()
 
+    app.state.llm_warmup_task = asyncio.create_task(_warmup_llm(app))
     logger.info("SLRAG engine started")
     yield
 
+    task = app.state.llm_warmup_task
+    if not task.done():
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
     sink.close()
     logger.info("SLRAG engine stopped")
 
@@ -86,64 +130,57 @@ def create_app() -> FastAPI:
     async def health():
         return {"status": "ok", "engine": "slrag"}
 
+    @app.get("/api/llm/status")
+    async def llm_status():
+        return getattr(app.state, "llm_status", {"status": "not_started"})
+
     # -- Preload Models --
     @app.get("/api/preload")
     async def preload():
+        errors = []
+        logger.info("Starting model preload")
         # Warm up Embedding Model
         try:
             from slrag.decompose.intent_set import _get_embedding_model
-            _get_embedding_model("BAAI/bge-small-en-v1.5")
+            await asyncio.to_thread(_get_embedding_model, "BAAI/bge-small-en-v1.5")
         except Exception as e:
             logger.error(f"Embedding load failed: {e}")
+            errors.append(f"Embedding load failed: {e}")
 
         # Warm up SpaCy model
         try:
             import spacy
-            spacy.load("en_core_web_sm")
+            await asyncio.to_thread(spacy.load, "en_core_web_sm")
         except Exception as e:
             logger.error(f"SpaCy load failed: {e}")
+            errors.append(f"SpaCy load failed: {e}")
 
         # Warm up CrossEncoder NLI Scorer (if configured)
         try:
             from slrag.synth.verifier import make_scorer
-            make_scorer()
+            await asyncio.to_thread(make_scorer)
         except Exception as e:
             logger.error(f"CrossEncoder NLI load failed: {e}")
+            errors.append(f"CrossEncoder NLI load failed: {e}")
 
         # Warm up Reranker (if used)
         try:
             from slrag.retrieve.rerank import Reranker
-            Reranker()
+            await asyncio.to_thread(Reranker)
         except Exception as e:
             logger.error(f"Reranker load failed: {e}")
+            errors.append(f"Reranker load failed: {e}")
 
-        # Warm up Ollama LLM (this usually takes ~1 min for the first query)
-        try:
-            import aiohttp
-            synth_cfg_path = _PROJECT_ROOT / "config" / "synth.yaml"
-            model = "llama3.2:1b"
-            if synth_cfg_path.exists():
-                try:
-                    with open(synth_cfg_path, "r", encoding="utf-8") as f:
-                        sc = yaml.safe_load(f) or {}
-                        model = sc.get("generator", {}).get("openai_compatible", {}).get("model", model)
-                except Exception:
-                    pass
+        # Reuse startup warmup; expose its result instead of waiting behind NLP loads.
+        task = getattr(app.state, "llm_warmup_task", None)
+        if task is None or (task.done() and getattr(app.state, "llm_status", {}).get("status") == "error"):
+            task = asyncio.create_task(_warmup_llm(app))
+            app.state.llm_warmup_task = task
+        result = await task
+        if result["status"] == "error":
+            errors.append(result["error"])
 
-            async with aiohttp.ClientSession() as session:
-                payload = {
-                    "model": model,
-                    "messages": [{"role": "user", "content": "warmup"}],
-                    "max_tokens": 1,
-                }
-                logger.info(f"Warming up Ollama LLM ({model})...")
-                async with session.post("http://127.0.0.1:11434/v1/chat/completions", json=payload, timeout=120) as resp:
-                    await resp.json()
-                logger.info(f"Ollama LLM warmup complete ({model}).")
-        except Exception as e:
-            logger.error(f"Ollama load failed: {e}")
-
-        return {"status": "ok", "message": "Models preloaded"}
+        return {"status": "error" if errors else "ok", "message": "Preload incomplete" if errors else "Models preloaded", "errors": errors}
 
     # -- API: list sessions --
     @app.get("/api/sessions")
@@ -198,7 +235,8 @@ def create_app() -> FastAPI:
             from slrag.ingest.indexer import HybridIndexer
             await asyncio.to_thread(HybridIndexer.run_pipeline, corpus_dir)
         except Exception as e:
-            logger.error(f"Error during re-indexing: {e}")
+            import traceback
+            logger.error(f"Error during re-indexing: {e}\n{traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Indexing failed: {str(e)}")
 
         from slrag.api.ws_server import reset_retriever

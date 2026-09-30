@@ -32,6 +32,7 @@ export default function App() {
   const [finalAnswer, setFinalAnswer] = useState(null);
   const [citations, setCitations] = useState([]);
   const [uncertainties, setUncertainties] = useState([]);
+  const [pipelineStatus, setPipelineStatus] = useState('');
   const [history, setHistory] = useState([]);
 
   const [stats, setStats] = useState({
@@ -117,7 +118,7 @@ export default function App() {
     fetch('/api/preload')
       .then(res => res.json())
       .then(data => {
-        console.log('Preload complete:', data);
+        console[data.status === 'ok' ? 'log' : 'error']('Model preload:', data);
         setIsPreloading(false);
       })
       .catch(err => {
@@ -208,23 +209,32 @@ export default function App() {
         });
         break;
 
+      case 'pipeline_status':
+        setPipelineStatus(msg.message || '');
+        break;
+
       case 'answer_version': {
-        setStreamingTokens(currentTokens => {
-          setHistory(prev => [
+        setSubQueries(msg.sub_queries || []);
+        const diagnostic = msg.llm_diagnostics;
+        if (diagnostic) {
+          setPipelineStatus(msg.suppression ? 'Previous answer reformatted; retrieval suppressed' : diagnostic.error ? `LLM failed: ${diagnostic.error}` :
+            diagnostic.calls === 0 ? `LLM skipped: ${diagnostic.context_chunks} grounding chunks` :
+            `LLM completed: ${diagnostic.calls} call(s), ${(msg.claims || []).length} verified claims, ${diagnostic.parse_errors} parse errors`);
+        }
+        setStreamingTokens([]);
+        setHistory(prev => [
             ...prev,
             {
               type: 'agent',
               answer: msg.answer || '',
-              version: msg.version || 1,
+              version: msg.version ?? 0,
               turn_id: msg.turn_id || 1,
               claims: msg.claims || [],
               citations: msg.citations || [],
             }
           ]);
-          return [];
-        });
         setFinalAnswer({
-          version: msg.version || 1,
+          version: msg.version ?? 0,
           turn_id: msg.turn_id || 1,
           answer: msg.answer || '',
         });
@@ -233,7 +243,7 @@ export default function App() {
         const tel = msg.telemetry || {};
         setStats(s => ({
           ...s,
-          answerVersion: msg.version || 1,
+          answerVersion: msg.version ?? 0,
           turnId: msg.turn_id || 1,
           claimCount: (msg.claims || []).length,
           citationsCount: (msg.citations || []).length,
@@ -357,6 +367,9 @@ export default function App() {
 
     setInputVal('');
     setUncertainties([]);
+    setSubQueries([]);
+    setStreamingTokens([]);
+    setPipelineStatus('Processing query…');
     setHistory(prev => [...prev, { type: 'user', text }]);
 
     // Simulate streaming chunks
@@ -537,7 +550,8 @@ export default function App() {
                           <span>{(item.citations || []).length} citations</span>
                         </div>
                         {item.claims && item.claims.length > 0 && (
-                          <div className="sub-intents-container">
+                          <details className="sub-intents-container">
+                            <summary>Verified supporting claims</summary>
                             {item.claims.map((claim, i) => (
                               <div key={i} className="sub-intent-item fade-in">
                                 <span className="sub-intent-text">{claim.text}</span>
@@ -546,13 +560,14 @@ export default function App() {
                                 ))}
                               </div>
                             ))}
-                          </div>
+                          </details>
                         )}
                         
                         {item.answer && (
                           <div className="answer-section fade-in" style={{ marginTop: '16px' }}>
                             <div
                               className="answer-sentence committed"
+                              style={{ whiteSpace: 'pre-wrap' }}
                               dangerouslySetInnerHTML={{
                                 __html: escapeHtml(item.answer).replace(/\[([^\]]+§[^\]]+)\]/g, '<span class="citation-chip">$1</span>')
                               }}
@@ -588,6 +603,7 @@ export default function App() {
                   </div>
                 )}
                 
+                {pipelineStatus && <div className="uncertainty-box"><span>{pipelineStatus}</span></div>}
                 {uncertainties.map((u, i) => (
                   <div key={i} className="uncertainty-box fade-in">
                     <span className="uncertainty-icon"><Icon name="warning" size={13} /></span>

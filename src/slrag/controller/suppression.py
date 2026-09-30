@@ -36,7 +36,7 @@ PRESENTATION_VOCABULARY = frozenset({
     "bullet", "points", "point", "translate", "tone", "reformat", "simplify",
     "elaborate", "expand", "shorter", "longer", "words", "word", "differently",
     "answer", "response", "table", "list", "summary", "terms", "term",
-    "sentence", "sentences", "paragraph", "paragraphs", "two", "three", "four", "five",
+    "sentence", "sentences", "paragraph", "paragraphs", "line", "lines", "one", "two", "three", "four", "five",
     "findings", "finding", "results", "result"
 })
 
@@ -201,6 +201,8 @@ def evaluate_suppression(
     explicit_prior_refs = [
         "your last answer",
         "your previous answer",
+        "the previous answer",
+        "the last answer",
         "your answer",
         "your response",
         "the response",
@@ -227,6 +229,13 @@ def evaluate_suppression(
     # 3. Suppression requires a genuine presentation restyle request:
     if not (has_presentation or has_valid_anaphora):
         return None
+
+    # A prior-answer restyle with no substantive additions never needs a corpus probe.
+    words = set(re.findall(r"\b[a-zA-Z0-9_-]+\b", prefix_lower))
+    neutral = STOPWORDS | PRESENTATION_VOCABULARY | set(config.get("presentation_reference_words", ()))
+    if has_valid_anaphora and all(word in neutral or word.isdigit() for word in words):
+        return ControllerDecision(t_s=t_s, decision="NO_RETRIEVAL", reason="presentation_restructure",
+                                  confidence=0.9, stage=0, stage_name="Stage 0: Suppression", threshold=0.0)
 
     # 4. Information Query Guard:
     # If the user is asking an information query ("why", "what", "where", "how", "tell me", "list out", "?"),

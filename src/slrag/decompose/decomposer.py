@@ -133,6 +133,27 @@ class Decomposer:
 
     # ── Task 3.1: Syntactic Candidate Splitter ──────────────────────
 
+    def _request_clauses(self, text: str) -> list[str]:
+        """Separate explicit request clauses and reuse their grammatical antecedent."""
+        from slrag.core.config import get_controller_config
+        cfg = get_controller_config()
+        pattern = cfg.get("request_clause_boundary")
+        parts = re.split(pattern, text, flags=re.IGNORECASE) if pattern else [text]
+        if len(parts) < 2:
+            return [text]
+        antecedent = re.sub(cfg.get("request_prefix_pattern", r"(?!)"), "", parts[0], flags=re.IGNORECASE).strip(" .?!")
+        chunks = list(self.nlp(parts[0]).noun_chunks) if getattr(self, "nlp", None) is not None else []
+        pronouns = cfg.get("request_pronoun_pattern", r"(?!)")
+        result = [parts[0].strip()]
+        for part in parts[1:]:
+            def resolve(match):
+                plural = match.group().casefold() in {"they", "them", "their"}
+                eligible = [chunk for chunk in chunks if chunk.root.tag_ in {"NNS", "NNPS"}] if plural else chunks
+                subject = eligible[0].text if eligible else antecedent
+                return subject + "'s" if match.group().casefold() in {"their", "its"} else subject
+            result.append(re.sub(pronouns, resolve, part, flags=re.IGNORECASE).strip())
+        return result
+
     def _syntactic_split(self, text: str) -> list[str]:
         """Split compound utterances at conjunction boundaries.
 
@@ -140,6 +161,9 @@ class Decomposer:
         (and, also, plus, as well as) and split the utterance into candidates.
         Falls back to returning the full text if spaCy is unavailable.
         """
+        explicit = self._request_clauses(text)
+        if len(explicit) > 1:
+            return explicit
         if not self.nlp:
             return [text]
 
@@ -212,7 +236,9 @@ class Decomposer:
             return None
 
         synth_config = self._load_yaml(self.config_dir / "synth.yaml")
-        model = synth_config.get("generator", {}).get("openai_compatible", {}).get("model", "llama3.2:1b")
+        llm_config = synth_config.get("generator", {}).get("openai_compatible", {})
+        model = llm_config.get("model", "qwen2.5:7b-instruct")
+        llm_url = llm_config.get("base_url", "http://127.0.0.1:11434/v1").rstrip("/") + "/chat/completions"
 
         payload = {
             "model": model,
@@ -240,7 +266,7 @@ class Decomposer:
                                         "query_nl": {"type": "string"},
                                         "search_string": {"type": "string"},
                                         "novel": {"type": "boolean"},
-                                        "slots": {"type": "object"},
+                                        "slots": {"type": "object", "additionalProperties": {"type": "string"}},
                                         "supersedes": {"type": "array", "items": {"type": "string"}}
                                     },
                                     "required": ["facet", "query_nl", "search_string", "novel", "slots", "supersedes"],
@@ -253,15 +279,16 @@ class Decomposer:
                     }
                 }
             },
-            "temperature": 0.1,
+            "temperature": llm_config.get("temperature", 0.0),
+            "max_tokens": llm_config.get("decomposition_max_tokens", llm_config.get("max_tokens", 1024)),
         }
 
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    self.llm_url,
+                    llm_url,
                     json=payload,
-                    timeout=aiohttp.ClientTimeout(total=60.0),
+                    timeout=aiohttp.ClientTimeout(total=llm_config.get("timeout_s", 60.0)),
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
@@ -298,12 +325,13 @@ class Decomposer:
 
     # ── Main entry point ────────────────────────────────────────────
 
-        async def decompose(
+    async def decompose(
         self,
         prefix: str,
         existing_intents: dict,
         ts: float,
         session_state=None,
+        is_final: bool = True,
     ) -> list:
         """Decompose a transcript prefix into self-contained sub-intents.
 
@@ -335,28 +363,34 @@ class Decomposer:
         # Task 3.2: LLM canonicalisation with 1 re-prompt allowed
         llm_response = None
         attempts = 0
+        self.last_source = "fallback"
 
-        while True:
+        while attempts < min(1 if not is_final else 2, self.max_llm_calls):
             if session_state is not None:
-                if session_state.turn_llm_calls >= 3:
-                    logger.warning("Global turn LLM call limit (3) reached.")
+                if session_state.turn_llm_calls >= (2 if is_final else 1):
+                    logger.warning("Decomposition budget exhausted; reserving one call for synthesis.")
                     break
                 session_state.turn_llm_calls += 1
 
             attempts += 1
-            if attempts > min(2, self.max_llm_calls):
-                break
 
             llm_response = await self._call_llm(prompt)
+            if llm_response and not (
+                isinstance(llm_response.get("sub_intents"), list)
+                and all(isinstance(item, dict)
+                        and isinstance(item.get("query_nl"), str) and item["query_nl"].strip()
+                        and isinstance(item.get("search_string"), str) and item["search_string"].strip()
+                        and isinstance(item.get("slots", {}), dict)
+                        for item in llm_response["sub_intents"])
+            ):
+                llm_response = None
 
             if llm_response and "sub_intents" in llm_response:
                 # Removed redundant rewriting
                 break
             else:
                 prompt += (
-                    "
-
-Error: Output must match the requested JSON format "
+                    "\n\nError: Output must match the requested JSON format "
                     "containing 'sub_intents'."
                 )
 
@@ -364,6 +398,7 @@ Error: Output must match the requested JSON format "
         new_intents: list[SubIntent] = []
 
         if llm_response and "sub_intents" in llm_response:
+            self.last_source = "llm"
             for si_data in llm_response["sub_intents"]:
                 facet = si_data.get("facet", self.default_facet)
                 if facet not in self.facets:
@@ -401,4 +436,39 @@ Error: Output must match the requested JSON format "
                 )
                 new_intents.append(intent)
 
+        explicit = self._request_clauses(prefix)
+        if len(new_intents) < len(explicit):
+            new_intents = [SubIntent(intent_id=f"i_{_make_ulid()}", facet=self._heuristic_facet(clause),
+                                    query_nl=clause, search_string=clause, first_seen_ts=ts,
+                                    status=IntentStatus.pending) for clause in explicit]
+            self.last_source = "split"
+
+        # Explicit exclusions are authoritative even when the model repeats a withdrawn task.
+        # All object vocabulary comes from this utterance, never a corpus/domain lexicon.
+        from slrag.core.config import get_controller_config
+        from slrag.synth.text import tokenize
+        excluded = []
+        for pattern in get_controller_config().get("withdrawal_patterns", ()):
+            for match in re.finditer(pattern, prefix, re.IGNORECASE):
+                terms = set(tokenize(match.group("object")))
+                if terms:
+                    excluded.append(terms)
+        if excluded:
+            new_intents = [intent for intent in new_intents
+                           if not any(terms <= set(tokenize(intent.query_nl)) for terms in excluded)]
+        scope_pattern = get_controller_config().get("exclusive_request_pattern")
+        scopes = list(re.finditer(scope_pattern, prefix, re.IGNORECASE)) if scope_pattern else []
+        if scopes:
+            latest = scopes[-1]
+            request = latest.group("request").strip()
+            context = re.split(r"\b(?:and|but)\b|[.!?;]", prefix[:latest.start()], maxsplit=1, flags=re.IGNORECASE)[0].strip()
+            if getattr(self, "nlp", None) is not None:
+                noun_chunks = list(self.nlp(context).noun_chunks)
+                if noun_chunks:
+                    context = noun_chunks[0].text
+            new_intents = [SubIntent(intent_id=f"i_{_make_ulid()}", facet=self._heuristic_facet(request),
+                                query_nl=f"{request} concerning {context}" if context else request,
+                                search_string=f"{request} {context}",
+                                first_seen_ts=ts, status=IntentStatus.pending)]
+            self.last_source = "reconciled"
         return new_intents

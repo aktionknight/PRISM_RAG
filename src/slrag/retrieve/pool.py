@@ -72,7 +72,7 @@ def add_to_pool(
 
                     # Update score for this intent
                     existing.scores_by_subquery[intent_id] = max(
-                        existing.scores_by_subquery.get(intent_id, 0.0),
+                        existing.scores_by_subquery.get(intent_id, float("-inf")),
                         chunk.score,
                     )
 
@@ -118,8 +118,9 @@ def get_pool_chunks_for_intent(
     """
     scored: list[tuple[float, EvidencePoolEntry]] = []
     for entry in session.evidence_pool.values():
-        score = entry.scores_by_subquery.get(intent_id, 0.0)
-        if score > 0 and not entry.speculative:
+        # Rerankers return signed logits; membership, not sign, identifies evidence.
+        score = entry.scores_by_subquery.get(intent_id)
+        if score is not None and np.isfinite(score) and not entry.speculative:
             scored.append((score, entry))
 
     scored.sort(key=lambda x: x[0], reverse=True)

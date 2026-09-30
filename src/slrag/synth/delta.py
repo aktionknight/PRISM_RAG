@@ -221,7 +221,7 @@ class TurnClassifier:
         controller_decisions: Sequence[ControllerDecision],
         sub_intents: Sequence[SubIntent],
     ) -> str | None:
-        for decision in controller_decisions:
+        for decision in controller_decisions[-1:]:
             if decision.decision == "NO_RETRIEVAL" and decision.reason in self._presentation_reasons:
                 return decision.reason
         tokens = set(tokenize(utterance))

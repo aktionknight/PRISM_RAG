@@ -1,0 +1,21 @@
+{
+  "model": "qwen2.5:7b-instruct",
+  "multi_intent": {
+    "questions": [
+      "List the sensor modules",
+      "what do the sensor modules aim to do?"
+    ],
+    "source": "split"
+  },
+  "late_constraint": {
+    "questions": [
+      "list the modules concerning the sensor"
+    ],
+    "source": "reconciled"
+  },
+  "streamed_summary": [
+    "NO_RETRIEVAL",
+    "NO_RETRIEVAL",
+    "NO_RETRIEVAL"
+  ]
+}
