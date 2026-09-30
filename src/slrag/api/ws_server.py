@@ -143,6 +143,7 @@ class PipelineSession:
     # Persistent decomposer + intent set — NOT recreated per chunk
     _decomposer: Any = field(default=None, repr=False)
     _intent_set: Any = field(default=None, repr=False)
+    _synthesis_engine: Any = field(default=None, repr=False)
     # Track total telemetry
     total_tokens_prompt: int = 0
     total_tokens_completion: int = 0
@@ -163,6 +164,50 @@ class PipelineSession:
             self._intent_set = IntentSet(session=self.state)
         return self._intent_set
 
+    @property
+    def synthesis_engine(self):
+        """Keep the ClaimGraph and refinement state for this session's lifetime."""
+        if self._synthesis_engine is None:
+            from slrag.synth.engine import SynthesisEngine
+            self._synthesis_engine = SynthesisEngine(
+                self.session_id,
+                retrieve_fn=self._retrieve_refinement,
+                pool=_SessionPoolView(self.state),
+            )
+        return self._synthesis_engine
+
+    async def _retrieve_refinement(self, intent):
+        """Use the existing dense search for an unresolved delta query."""
+        from slrag.retrieve.pool import add_to_pool
+        chunks = await get_retriever().search(intent.search_string, top_k=10)
+        t_s = self.chunks[-1]["t_s"] if self.chunks else 0.0
+        for chunk in chunks:
+            add_to_pool(self.state, chunk, intent.intent_id, t_s, speculative=False)
+        self.retrieval_events.append({
+            "timestamp_s": t_s,
+            "query": intent.search_string,
+            "trigger": "late_constraint",
+        })
+        return chunks
+
+
+class _SessionPoolView:
+    """Read-only chunk view of the live session pool for the delta engine."""
+
+    def __init__(self, state: SessionState):
+        self.state = state
+
+    def chunks(self):
+        from slrag.core.schemas import RetrievedChunk
+        return [
+            RetrievedChunk(
+                chunk_id=entry.chunk_id, doc_id=entry.doc_id, section_id=entry.section_id,
+                text=entry.text, citation_label=entry.citation_label,
+                score=max(entry.scores_by_subquery.values(), default=0.0),
+            )
+            for entry in self.state.evidence_pool.values()
+        ]
+
 
 class SessionManager:
     """Manages WebSocket sessions."""
@@ -175,6 +220,8 @@ class SessionManager:
         state = SessionState(session_id=sid)
         session = PipelineSession(session_id=sid, state=state)
         self.sessions[sid] = session
+        from slrag.telemetry.metrics import set_active_sessions
+        set_active_sessions(len(self.sessions))
         return session
 
     def get(self, session_id: str) -> PipelineSession | None:
@@ -183,7 +230,12 @@ class SessionManager:
     def end(self, session_id: str) -> bool:
         session = self.sessions.pop(session_id, None)
         if session:
+            if session._synthesis_engine is not None:
+                session._synthesis_engine.destroy()
+                session._synthesis_engine = None
             session.state.destroy()
+            from slrag.telemetry.metrics import set_active_sessions
+            set_active_sessions(len(self.sessions))
             return True
         return False
 
@@ -246,11 +298,33 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
     from slrag.core.config import get_controller_config
 
     controller = RetrievalController(session=session.state.controller)
+    last_retrieve_time = session.state.controller.last_retrieve_time
     decision_result = controller.process_chunk(chunk)
     decision = decision_result.decision
     reason = decision_result.reason
     confidence = decision_result.confidence
     stage = getattr(decision_result, 'stage', None)
+
+    # The streaming controller has no claim graph, so its final-chunk safety
+    # rule can mistake a request about the prior answer for new corpus content.
+    # On utterance end, reuse Component 4's session-aware turn classifier before
+    # dispatching retrieval. This adds no LLM call and keeps new-content turns on
+    # the existing retrieval path.
+    if is_final and decision == ControllerDecisionType.RETRIEVE:
+        classification = session.synthesis_engine.classify(session.prefix)
+        if classification.turn_type == "PRESENTATION_ONLY":
+            decision_result = decision_result.model_copy(update={
+                "decision": ControllerDecisionType.NO_RETRIEVAL,
+                "reason": classification.reason,
+                "confidence": 0.9,
+                "stage": 0,
+                "stage_name": "Stage 0: Session-aware Suppression",
+            })
+            decision = decision_result.decision
+            reason = decision_result.reason
+            confidence = decision_result.confidence
+            stage = decision_result.stage
+            session.state.controller.last_retrieve_time = last_retrieve_time
 
     latency_ms = (time.perf_counter() - started) * 1000
 
@@ -320,9 +394,9 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
         # Diff against IntentSet — dispatch ONLY genuinely novel intents (S-2)
         try:
             novel_intents = await session.intent_set.add_intents(all_candidates, prefix=session.prefix)
-        except Exception as e:
-            logger.warning(f"IntentSet dedup failed ({e}), treating all as novel")
-            novel_intents = all_candidates
+        except Exception:
+            logger.exception("IntentSet dedup failed; refusing duplicate retrieval dispatch")
+            raise
 
         decomp_latency_ms = (time.perf_counter() - decomp_start) * 1000
 
@@ -349,6 +423,7 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
             "type": "subqueries_updated",
             "t_s": t_s,
             "sub_queries": session.sub_queries,
+            "canonical_intents": len(all_candidates),
             "new_intents": [
                 {"facet": i.facet, "query_nl": i.query_nl, "intent_id": i.intent_id}
                 for i in novel_intents
@@ -473,9 +548,9 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
 
     # ── Stage 3: Synthesis ──
     synthesis_telemetry = {}
-    from slrag.synth.engine import SynthesisEngine, TurnInput
+    from slrag.synth.engine import TurnInput
 
-    engine = SynthesisEngine(session.session_id)
+    engine = session.synthesis_engine
     from slrag.retrieve.pool import get_pool_chunks_for_intent
 
     turn_evidence = {
@@ -524,11 +599,42 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
                 session.total_tokens_prompt += tel.tokens.get("prompt", 0)
                 session.total_tokens_completion += tel.tokens.get("completion", 0)
                 session.total_cost_usd += tel.cost_usd
-                session.total_llm_calls += 1
+                session.total_llm_calls += event.extensions.get("telemetry", {}).get(
+                    "llm_calls", event.usage.llm_calls
+                )
 
             # Emit synthesis telemetry events
             for te in event.telemetry:
+                from slrag.telemetry.metrics import (
+                    record_answer_version,
+                    record_fabricated_ids,
+                    record_llm_call,
+                    set_citation_support_rate,
+                )
+                calls = int(te.payload.get("llm_calls", 0))
+                if calls:
+                    record_llm_call(
+                        component=te.component,
+                        prompt_tokens=int(te.payload.get("prompt_tokens", 0)),
+                        completion_tokens=int(te.payload.get("completion_tokens", 0)),
+                        calls=calls,
+                    )
+                stripped = int(te.payload.get("fabricated_ids_stripped", 0))
+                if stripped:
+                    record_fabricated_ids(stripped)
                 await bus.emit(te)
+
+            lineage = event.lineage
+            from slrag.telemetry.metrics import record_answer_version, set_citation_support_rate
+            record_answer_version(
+                claims_retained=len(lineage.retained) if lineage else 0,
+                claims_superseded=len(lineage.superseded) if lineage else 0,
+                claims_added=len(lineage.added) if lineage else 0,
+            )
+            if event.verification:
+                set_citation_support_rate(
+                    sum(1 for result in event.verification if result.ok) / len(event.verification)
+                )
 
     synthesis_latency_ms = (time.perf_counter() - synthesis_start) * 1000
 

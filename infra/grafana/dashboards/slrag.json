@@ -92,13 +92,13 @@
       ]
     },
     {
-      "title": "Token Usage",
+      "title": "Avg Tokens per Prompt (5m)",
       "type": "stat",
       "gridPos": { "h": 4, "w": 8, "x": 8, "y": 8 },
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "targets": [
         {
-          "expr": "slrag_llm_tokens_total",
+          "expr": "sum by (type) (increase(slrag_llm_tokens_total[5m])) / sum(increase(slrag_llm_calls_total[5m]))",
           "legendFormat": "{{type}}",
           "refId": "A"
         }
@@ -162,7 +162,7 @@
       "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
       "targets": [
         {
-          "expr": "slrag_citation_support_rate",
+          "expr": "avg(slrag_citation_support_rate)",
           "refId": "A"
         }
       ],
