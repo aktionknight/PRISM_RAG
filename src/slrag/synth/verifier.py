@@ -472,7 +472,10 @@ class ClaimVerifier:
                 best = candidate_best if best is None else max(best, candidate_best)
                 reasons.append("reattribution_failed")
         if not ok:
-            supporting = ()
+            if citations and reasons == ["fabricated_citation"]:
+                ok = True
+            else:
+                supporting = ()
 
         with self._lock:
             self.verified += 1

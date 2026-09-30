@@ -184,7 +184,8 @@ class SynthesisEngine:
             else self.classify(turn.utterance, turn.controller_decisions, turn.sub_intents)
         )
         self._epoch += 1
-        telemetry = _Telemetry(self.session_id, turn)
+        model = self.config.get("generator", {}).get("openai_compatible", {}).get("model")
+        telemetry = _Telemetry(self.session_id, turn, model=model)
         telemetry.add(
             "classify",
             _ms(started),
@@ -364,7 +365,9 @@ class SynthesisEngine:
         )
         telemetry.add("render", _ms(started), {"style": request.style, "bullets": request.bullets,
                                                 "retrieval_required": False, "restyle": restyle,
-                                                "llm_calls": usage.llm_calls})
+                                                "llm_calls": usage.llm_calls,
+                                                "prompt_tokens": usage.prompt_tokens,
+                                                "completion_tokens": usage.completion_tokens})
         output = build_answer_output(
             session_id=self.session_id,
             turn_id=turn.turn_id,
@@ -518,12 +521,25 @@ class SynthesisEngine:
                 "natural-sounding paragraph. Keep every citation marker EXACTLY as it appears "
                 "in the text (e.g. [Doc_1 §1]). Do not invent any new facts or drop any citations.\n\n"
             ) + raw_answer
+            render_started = time.perf_counter()
+            prompt_tokens, completion_tokens = len(prompt.split()), 0
             try:
                 resp = await self.generator.client.complete(prompt)
+                if resp:
+                    prompt_tokens = getattr(resp, "prompt_tokens", prompt_tokens)
+                    completion_tokens = getattr(resp, "completion_tokens", 0)
                 if resp and resp.text:
-                    raw_answer = resp.text
+                    from slrag.core.citations import find_markers
+                    _, markers = find_markers(resp.text)
+                    rewritten_labels = {lbl for labels in markers for lbl in labels}
+                    if set(citations).issubset(rewritten_labels):
+                        raw_answer = resp.text
             except Exception:
                 pass
+            telemetry.add("render", _ms(render_started), {
+                "llm_calls": 1, "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+            })
 
         output = build_answer_output(
             session_id=self.session_id,
@@ -534,6 +550,10 @@ class SynthesisEngine:
             uncertainty=uncertainty,
             sub_queries=sub_queries,
             retrieval_events=retrieval_events,
+            controller_decisions=turn.controller_decisions,
+            graph=self.graph,
+            lineage=lineage,
+            telemetry=telemetry.summary(),
             config=self.config,
         )
         extensions = build_extensions(
@@ -595,9 +615,10 @@ class SynthesisEngine:
 class _Telemetry:
     """Builds frozen ``TelemetryEvent`` records for Matangi's bus (component = synthesis.*)."""
 
-    def __init__(self, session_id: str, turn: TurnInput) -> None:
+    def __init__(self, session_id: str, turn: TurnInput, *, model: str | None = None) -> None:
         self.session_id = session_id
         self.turn = turn
+        self.model = model
         self.events: list[TelemetryEvent] = []
 
     def add(self, stage: str, latency_ms: float, payload: dict[str, Any]) -> None:
@@ -628,7 +649,18 @@ class _Telemetry:
         )
 
     def summary(self) -> dict[str, Any]:
-        return {"latency_ms": {e.component: round(e.latency_ms, 3) for e in self.events}}
+        from slrag.telemetry.cost import make_cost_accumulator
+        accumulator = make_cost_accumulator(model=self.model)
+        for event in self.events:
+            calls = event.payload.get("llm_calls", 0)
+            if calls:
+                accumulator.add_llm_call(event.payload.get("prompt_tokens", 0),
+                                         event.payload.get("completion_tokens", 0))
+                accumulator.llm_calls += calls - 1
+        return {
+            "latency_ms": {e.component: round(e.latency_ms, 3) for e in self.events},
+            **accumulator.summary(),
+        }
 
 
 def _ms(started: float) -> float:
