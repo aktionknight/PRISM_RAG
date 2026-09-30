@@ -6,6 +6,7 @@ import numpy as np
 
 from slrag.core.schemas import ControllerDecision, ControllerReason
 from slrag.core.config import get_controller_config
+from slrag.core.paths import index_dir
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ def _load_bm25_probe():
     _BM25_LOAD_ATTEMPTED = True
     try:
         import bm25s
-        bm25_path = Path(".index/bm25")
+        bm25_path = index_dir() / "bm25"
         if bm25_path.exists():
             _BM25_INSTANCE = bm25s.BM25.load(str(bm25_path))
             logger.info("Loaded BM25 index for Controller Stage 2 probe")
@@ -43,7 +44,7 @@ def _load_calibration() -> dict:
     global _CALIBRATION_CACHE
     if _CALIBRATION_CACHE is not None:
         return _CALIBRATION_CACHE
-    calib_file = Path(".index/probe_calibration.json")
+    calib_file = index_dir() / "probe_calibration.json"
     if calib_file.exists():
         try:
             with open(calib_file, "r", encoding="utf-8") as f:

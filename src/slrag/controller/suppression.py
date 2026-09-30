@@ -58,7 +58,8 @@ def get_indexed_doc_terms() -> set[str]:
     doc_terms: set[str] = set()
 
     # 1. Inspect .index/metadata.json for all indexed document IDs
-    meta_path = Path(".index/metadata.json")
+    from slrag.core.paths import index_dir, corpus_dir as selected_corpus_dir
+    meta_path = index_dir() / "metadata.json"
     if meta_path.exists():
         try:
             with open(meta_path, "r", encoding="utf-8") as f:
@@ -72,7 +73,7 @@ def get_indexed_doc_terms() -> set[str]:
             logger.debug(f"Could not load doc_ids from metadata.json: {e}")
 
     # 2. Inspect corpus directory files for any document stems
-    corpus_dir = Path("corpus")
+    corpus_dir = selected_corpus_dir()
     if corpus_dir.exists():
         try:
             for p in corpus_dir.glob("**/*.*"):

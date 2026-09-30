@@ -1,21 +1,27 @@
 # Stage 1: Build the React UI
 FROM node:20-slim AS ui-build
 WORKDIR /app/ui
-# We copy package files first for caching
 COPY ui/package.json ui/package-lock.json* ./
 RUN npm install
 COPY ui/ ./
 RUN npm run build
 
-# Stage 2: Build the Python backend
+# Stage 2: Build the Python backend and include Ollama
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps
+# System deps and Ollama installation
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl gcc g++ && \
+    curl -fsSL https://ollama.com/install.sh | sh && \
     rm -rf /var/lib/apt/lists/*
+
+# Pull the LLM model during build
+# We start ollama in the background, wait for it, pull the model, and then exit.
+RUN nohup bash -c "ollama serve &" && \
+    sleep 5 && \
+    ollama pull qwen2.5:7b-instruct
 
 # Python deps
 COPY pyproject.toml .
@@ -41,6 +47,11 @@ RUN chmod -R 777 .index
 # Copy built UI from Stage 1
 COPY --from=ui-build /app/ui/dist /app/ui/dist
 
-EXPOSE 8000
+# Copy startup script
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
 
-CMD ["uvicorn", "slrag.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 8000
+EXPOSE 11434
+
+CMD ["/start.sh"]

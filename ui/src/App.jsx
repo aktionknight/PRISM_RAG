@@ -313,12 +313,17 @@ export default function App() {
   const resetSession = async () => {
     try {
       const res = await fetch('/api/corpus/reset', { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        setCorpusDocs(data.documents || []);
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({}));
+        throw new Error(error.detail || `Server returned ${res.status}`);
       }
+      const data = await res.json();
+      setCorpusDocs(data.documents || []);
     } catch (e) {
       console.warn('Corpus reset endpoint failed:', e);
+      showToast(`Reset failed: ${e.message}`, 'warn');
+      await fetchCorpusDocs();
+      return;
     }
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -357,7 +362,7 @@ export default function App() {
       fabricatedIds: 0,
       traceCoverage: 1.0,
     });
-    showToast('All sessions, documents, and FAISS vector index completely reset.', 'success');
+    showToast('Custom uploads and sessions reset. Permanent test document retained.', 'success');
   };
 
 
@@ -434,7 +439,7 @@ export default function App() {
         <div className="header-right">
           <div
             className="corpus-badge"
-            title={`Corpus: ${corpusDocs.map(d => d.name + (d.is_sample ? ' (sample)' : '')).join(', ')}`}
+            title={`Corpus: ${corpusDocs.map(d => d.name + (d.is_permanent ? ' (permanent)' : d.is_sample ? ' (sample)' : '')).join(', ')}`}
           >
             <Icon name="file" size={12} />
             <span>{corpusDocs.length} Doc{corpusDocs.length === 1 ? '' : 's'}</span>
@@ -701,9 +706,35 @@ export default function App() {
           onChange={handleFileUpload}
           disabled={isUploading}
         />
-        <button className="btn btn-secondary" onClick={resetSession} disabled={isUploading} title="Complete reset: clear all sessions, documents, and FAISS vector index">
+        <button className="btn btn-secondary" onClick={resetSession} disabled={isUploading} title="Reset sessions and custom uploads; keep the permanent test document">
           <Icon name="reset" size={14} />
           Reset
+        </button>
+
+        <button
+          className="btn btn-secondary"
+          onClick={async () => {
+            showToast('Running evaluation test suite...', 'warn');
+            try {
+              const res = await fetch('/api/test-suite/run', { method: 'POST' });
+              const data = await res.json();
+              if (data.status === 'success') {
+                console.log(data.output);
+                showToast('Test suite completed! See console for details.', 'success');
+              } else {
+                console.error(data.output);
+                showToast('Test suite failed! See console for details.', 'warn');
+              }
+            } catch (err) {
+              console.error(err);
+              showToast('Error running test suite.', 'warn');
+            }
+          }}
+          disabled={isUploading}
+          title="Run PRISM evaluation examples on isolated test corpus"
+        >
+          <Icon name="file" size={14} />
+          Run Test Suite
         </button>
       </div>
 

@@ -32,7 +32,7 @@ def cmd_index(args: argparse.Namespace) -> None:
         logger.error(f"Corpus directory not found: {corpus_dir}")
         sys.exit(1)
 
-    HybridIndexer.run_pipeline(corpus_dir)
+    HybridIndexer.run_pipeline(corpus_dir, output_dir=args.out)
     logger.info("Index build complete.")
 
 

@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _UI_DIR = _PROJECT_ROOT / "ui"
 _CONFIG_PATH = _PROJECT_ROOT / "config" / "app.yaml"
+_PERMANENT_CORPUS_FILES = frozenset({"examples.md"})
 
 
 def _load_config() -> dict[str, Any]:
@@ -203,6 +204,7 @@ def create_app() -> FastAPI:
                         "name": f.name,
                         "size": f.stat().st_size,
                         "is_sample": f.name.lower().startswith("sample_doc"),
+                        "is_permanent": f.name.casefold() in _PERMANENT_CORPUS_FILES,
                     })
         return {"documents": docs, "count": len(docs)}
 
@@ -224,6 +226,8 @@ def create_app() -> FastAPI:
         corpus_dir.mkdir(parents=True, exist_ok=True)
 
         safe_name = Path(file.filename).name
+        if safe_name.casefold() in _PERMANENT_CORPUS_FILES:
+            raise HTTPException(status_code=409, detail="This filename belongs to a permanent document. Rename your upload.")
         target_path = corpus_dir / safe_name
 
         content = await file.read()
@@ -249,6 +253,7 @@ def create_app() -> FastAPI:
                     "name": f.name,
                     "size": f.stat().st_size,
                     "is_sample": f.name.lower().startswith("sample_doc"),
+                    "is_permanent": f.name.casefold() in _PERMANENT_CORPUS_FILES,
                 })
 
         return {
@@ -258,21 +263,51 @@ def create_app() -> FastAPI:
             "documents": docs,
         }
 
+    @app.post("/api/test-suite/run")
+    async def run_test_suite():
+        """Runs the PRISM RAG evaluation criteria examples on a separate test corpus."""
+        import subprocess
+        import sys
+        import os
+
+        try:
+            # We run the script that handles indexing the test corpus and running the examples
+            result = await asyncio.to_thread(
+                subprocess.run,
+                [sys.executable, str(_PROJECT_ROOT / "scripts" / "run_test_suite.py")],
+                cwd=_PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8", check=True,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            )
+            return {
+                "status": "success",
+                "output": result.stdout
+            }
+        except subprocess.CalledProcessError as e:
+            return {
+                "status": "error",
+                "output": e.stdout + "\n" + e.stderr
+            }
+
     @app.post("/api/corpus/reset")
     async def reset_corpus():
-        """Reset corpus, FAISS index, and all session state completely."""
+        """Remove custom uploads and session state, retaining permanent documents."""
         import shutil
+
         corpus_dir = _PROJECT_ROOT / "corpus"
         deleted = []
+        errors = []
         if corpus_dir.exists():
             for f in list(corpus_dir.iterdir()):
                 if f.is_file():
+                    if f.name.casefold() in _PERMANENT_CORPUS_FILES:
+                        continue
                     try:
                         f.unlink()
                         deleted.append(f.name)
                         logger.info(f"Deleted corpus document: {f.name}")
                     except Exception as e:
                         logger.error(f"Failed deleting {f.name}: {e}")
+                        errors.append(f"{f.name}: {e}")
 
         # Completely clear FAISS index, BM25 index, and all indexing artifacts
         index_dir = _PROJECT_ROOT / ".index"
@@ -286,6 +321,7 @@ def create_app() -> FastAPI:
                     logger.info(f"Deleted index artifact: {item.name}")
                 except Exception as e:
                     logger.error(f"Failed deleting index artifact {item.name}: {e}")
+                    errors.append(f"{item.name}: {e}")
         index_dir.mkdir(parents=True, exist_ok=True)
 
         from slrag.api.ws_server import reset_retriever, get_session_manager
@@ -293,11 +329,24 @@ def create_app() -> FastAPI:
         mgr = get_session_manager()
         mgr.reset_all()
 
+        if errors:
+            raise HTTPException(status_code=500, detail="Reset incomplete: " + "; ".join(errors))
+
+        if any(corpus_dir.glob("*")):
+            from slrag.ingest.indexer import HybridIndexer
+            try:
+                await asyncio.to_thread(HybridIndexer.run_pipeline, corpus_dir)
+            except Exception as exc:
+                raise HTTPException(status_code=500, detail=f"Permanent document re-indexing failed: {exc}") from exc
+            reset_retriever()
+
+        remaining = await list_corpus_documents()
+
         return {
             "status": "ok",
-            "message": "All session data, corpus documents, and FAISS index have been completely reset.",
+            "message": "Custom uploads and sessions reset. Permanent documents retained and indexed.",
             "deleted": deleted,
-            "documents": [],
+            "documents": remaining["documents"],
         }
 
 

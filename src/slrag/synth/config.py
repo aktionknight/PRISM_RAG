@@ -43,7 +43,8 @@ def load_facets(path: str | Path | None = None) -> dict[str, dict[str, Any]]:
     always fine: ``facet_label`` falls back to a readable form of the key.
     """
     if path is None:
-        generated = REPO_ROOT / ".index" / "facets.yaml"
+        from slrag.core.paths import index_dir
+        generated = index_dir() / "facets.yaml"
         path = generated if generated.exists() else config_dir() / "facets.yaml"
     facets = _load_yaml(Path(path)).get("facets", {}) or {}
     if isinstance(facets, list):   # Phase 0 output

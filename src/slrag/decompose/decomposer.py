@@ -77,7 +77,8 @@ class Decomposer:
         self.app_config = self._load_yaml(self.config_dir / "app.yaml")
         
         # Prefer generated facets over manual config
-        index_facets_path = self.config_dir.parent / ".index" / "facets.yaml"
+        from slrag.core.paths import index_dir
+        index_facets_path = index_dir() / "facets.yaml"
         if index_facets_path.exists():
             self.facets_config = self._load_yaml(index_facets_path)
             logger.info("Decomposer: loaded generated facets from .index/facets.yaml")

@@ -39,7 +39,7 @@ class HybridIndexer:
       - embedding.model_name, embedding.dimension
     """
 
-    def __init__(self) -> None:
+    def __init__(self, output_dir: str | Path | None = None) -> None:
         self.config = _load_config("retrieval")
         self.project_root = Path(__file__).resolve().parents[3]
 
@@ -48,6 +48,15 @@ class HybridIndexer:
         self.dense_path = self.project_root / idx["dense_path"]
         self.metadata_path = self.project_root / idx["metadata_path"]
         self.chunks_path = self.project_root / idx["chunks_path"]
+
+        import os
+        if output_dir is not None or os.environ.get("SLRAG_INDEX_DIR"):
+            from slrag.core.paths import index_dir
+            output = Path(output_dir) if output_dir is not None else index_dir()
+            self.sparse_path = output / "bm25"
+            self.dense_path = output / "faiss"
+            self.metadata_path = output / "metadata.json"
+            self.chunks_path = output / "chunks.jsonl"
 
         emb = self.config["embedding"]
         self.model_name: str = emb["model_name"]
@@ -217,7 +226,7 @@ class HybridIndexer:
             "sample_count": len(margins),
         }
 
-        calib_file = self.project_root / ".index" / "probe_calibration.json"
+        calib_file = self.chunks_path.parent / "probe_calibration.json"
         calib_file.parent.mkdir(parents=True, exist_ok=True)
         with open(calib_file, "w", encoding="utf-8") as f:
             json.dump(calib_data, f, indent=2)
@@ -229,7 +238,7 @@ class HybridIndexer:
         return calib_data
 
     @classmethod
-    def run_pipeline(cls, corpus_dir: Path) -> None:
+    def run_pipeline(cls, corpus_dir: Path, output_dir: str | Path | None = None) -> None:
         """Run the full ingest pipeline: load → chunk → index."""
         from slrag.ingest.loader import MarkdownLoader
         from slrag.ingest.chunker import StructureAwareChunker
@@ -248,7 +257,7 @@ class HybridIndexer:
             logger.error("Chunker produced no chunks — aborting.")
             return
 
-        indexer = cls()
+        indexer = cls(output_dir=output_dir)
         indexer.build_and_save(chunks)
         
         # ── Run Phase 0 Facet Discovery ──

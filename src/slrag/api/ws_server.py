@@ -71,8 +71,10 @@ def get_retriever():
         
         class RetrievalStack:
             def __init__(self):
-                self.dense = DenseRetriever(index_path=Path(".index/faiss"), chunks_path=Path(".index/chunks.jsonl"))
-                self.sparse = SparseRetriever(index_path=Path(".index/bm25"), chunks_path=Path(".index/chunks.jsonl"))
+                from slrag.core.paths import index_dir
+                selected_index = index_dir()
+                self.dense = DenseRetriever(index_path=selected_index / "faiss", chunks_path=selected_index / "chunks.jsonl")
+                self.sparse = SparseRetriever(index_path=selected_index / "bm25", chunks_path=selected_index / "chunks.jsonl")
                 self.reranker = Reranker()
                 from slrag.synth.config import _load_yaml
                 self.config = _load_yaml(Path("config/retrieval.yaml"))
@@ -97,6 +99,8 @@ def reset_retriever():
     try:
         from slrag.controller.probe import reset_probe_cache
         reset_probe_cache()
+        from slrag.controller.suppression import reset_suppression_cache
+        reset_suppression_cache()
     except Exception:
         pass
     logger.info("Retriever instance and probe cache reset.")

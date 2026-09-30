@@ -39,11 +39,10 @@ def apply_rrf(
     k = config.get("rrf", {}).get("k", 60)
 
     # ── Load dynamic weights from facets.yaml (Phase 0 output) ──
-    from pathlib import Path
     import yaml
 
-    project_root = Path(__file__).resolve().parents[3]
-    index_facets = project_root / ".index" / "facets.yaml"
+    from slrag.core.paths import index_dir
+    index_facets = index_dir() / "facets.yaml"
     
     w_sparse, w_dense = 0.5, 0.5
     found_facet = False
