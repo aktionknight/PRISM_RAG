@@ -157,7 +157,7 @@ class OpenAICompatibleClient:
         stream_transport: StreamTransport | None = None,
     ) -> None:
         opts = (config if config is not None else load_synth_config())["generator"]["openai_compatible"]
-        self.base_url = str(opts["base_url"]).rstrip("/")
+        import os; self.base_url = os.environ.get("OLLAMA_BASE_URL", str(opts["base_url"])).rstrip("/")
         self.model = str(opts["model"])
         self.temperature = float(opts["temperature"])
         self.max_tokens = int(opts["max_tokens"])
@@ -666,8 +666,20 @@ class LLMGenerator:
             if draft is None:
                 invalid += 1
                 continue
-            seq += 1
-            yield draft
+            # Verify each sentence as its own claim. A mixed LLM claim can contain
+            # both supported and unsupported facts; sentence-level verification lets
+            # the supported fact survive without carrying the uncertain sentence.
+            sentences = split_sentences(draft.text) or [draft.text]
+            for sentence in sentences:
+                yield DraftClaim(
+                    seq=seq,
+                    facet=draft.facet,
+                    text=sentence,
+                    citations=draft.citations,
+                    intent_id=draft.intent_id,
+                    confidence=draft.confidence,
+                )
+                seq += 1
         self.parse_errors = self._source_broken + invalid
 
     async def _items(self, prompt: str, schema: dict | None) -> AsyncIterator[Any]:

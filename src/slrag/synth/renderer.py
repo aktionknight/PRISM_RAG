@@ -197,7 +197,13 @@ def build_answer_output(
         suppression_reason=suppression_reason,
         controller_decisions=list(controller_decisions),
         claims=graph.to_output() if graph else [],
-        version_lineage=lineage,
+        version_lineage={
+            "from_version": lineage.from_version,
+            "to_version": lineage.to_version,
+            "retained": list(lineage.retained),
+            "superseded": list(lineage.superseded),
+            "added": list(lineage.added),
+        } if lineage is not None else None,
         telemetry=telemetry,
     )
 

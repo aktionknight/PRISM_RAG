@@ -7,6 +7,7 @@ or via ``slrag serve`` CLI command.
 from __future__ import annotations
 
 import logging
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,22 @@ def _load_config() -> dict[str, Any]:
         with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
     return {}
+
+
+def _test_suite_config() -> dict[str, str]:
+    with (_PROJECT_ROOT / "bench" / "ui_test_suite.json").open(encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _corpus_documents() -> list[dict[str, Any]]:
+    permanent = _test_suite_config()["corpus_file"].casefold()
+    corpus = _PROJECT_ROOT / "corpus"
+    return [
+        {"name": path.name, "size": path.stat().st_size,
+         "is_sample": path.name.casefold() == permanent,
+         "is_permanent": path.name.casefold() == permanent}
+        for path in sorted(corpus.iterdir()) if path.is_file()
+    ] if corpus.exists() else []
 
 
 @asynccontextmanager
@@ -126,8 +143,9 @@ def create_app() -> FastAPI:
                     "messages": [{"role": "user", "content": "warmup"}],
                     "max_tokens": 1
                 }
-                logger.info("Warming up Ollama LLM...")
-                async with session.post("http://127.0.0.1:11434/v1/chat/completions", json=payload, timeout=120) as resp:
+                import os
+                url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/v1/chat/completions")
+                async with session.post(url, json=payload, timeout=120) as resp:
                     await resp.json()
                 logger.info("Ollama LLM warmup complete.")
         except Exception as e:
@@ -147,16 +165,7 @@ def create_app() -> FastAPI:
     @app.get("/api/corpus/documents")
     async def list_corpus_documents():
         """List all documents currently in the corpus."""
-        corpus_dir = _PROJECT_ROOT / "corpus"
-        docs = []
-        if corpus_dir.exists():
-            for f in sorted(corpus_dir.iterdir()):
-                if f.is_file():
-                    docs.append({
-                        "name": f.name,
-                        "size": f.stat().st_size,
-                        "is_sample": f.name.lower().startswith("sample_doc"),
-                    })
+        docs = _corpus_documents()
         return {"documents": docs, "count": len(docs)}
 
     @app.post("/api/corpus/upload")
@@ -177,6 +186,8 @@ def create_app() -> FastAPI:
         corpus_dir.mkdir(parents=True, exist_ok=True)
 
         safe_name = Path(file.filename).name
+        if safe_name.casefold() == _test_suite_config()["corpus_file"].casefold():
+            raise HTTPException(status_code=409, detail="The permanent sample document cannot be overwritten. Rename your upload.")
         target_path = corpus_dir / safe_name
 
         content = await file.read()
@@ -194,14 +205,7 @@ def create_app() -> FastAPI:
         from slrag.api.ws_server import reset_retriever
         reset_retriever()
 
-        docs = []
-        for f in sorted(corpus_dir.iterdir()):
-            if f.is_file():
-                docs.append({
-                    "name": f.name,
-                    "size": f.stat().st_size,
-                    "is_sample": f.name.lower().startswith("sample_doc"),
-                })
+        docs = _corpus_documents()
 
         return {
             "status": "ok",
@@ -210,21 +214,42 @@ def create_app() -> FastAPI:
             "documents": docs,
         }
 
+    @app.post("/api/test-suite/prepare")
+    async def prepare_test_suite():
+        """Index the permanent sample with the corpus and return its test prompt."""
+        suite = _test_suite_config()
+        corpus_dir = _PROJECT_ROOT / "corpus"
+        if not (corpus_dir / suite["corpus_file"]).is_file():
+            raise HTTPException(status_code=409, detail="The permanent sample document is missing.")
+        from slrag.ingest.indexer import HybridIndexer
+        from slrag.api.ws_server import reset_retriever
+        try:
+            await asyncio.to_thread(HybridIndexer.run_pipeline, corpus_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Test corpus indexing failed: {exc}") from exc
+        reset_retriever()
+        return {"status": "ok", **suite, "documents": _corpus_documents()}
+
     @app.post("/api/corpus/reset")
     async def reset_corpus():
-        """Reset corpus, FAISS index, and all session state completely."""
+        """Reset custom uploads and sessions, retaining and indexing the permanent sample."""
         import shutil
         corpus_dir = _PROJECT_ROOT / "corpus"
+        permanent = _test_suite_config()["corpus_file"].casefold()
         deleted = []
+        errors = []
         if corpus_dir.exists():
             for f in list(corpus_dir.iterdir()):
                 if f.is_file():
+                    if f.name.casefold() == permanent:
+                        continue
                     try:
                         f.unlink()
                         deleted.append(f.name)
                         logger.info(f"Deleted corpus document: {f.name}")
                     except Exception as e:
                         logger.error(f"Failed deleting {f.name}: {e}")
+                        errors.append(f"{f.name}: {e}")
 
         # Completely clear FAISS index, BM25 index, and all indexing artifacts
         index_dir = _PROJECT_ROOT / ".index"
@@ -238,6 +263,7 @@ def create_app() -> FastAPI:
                     logger.info(f"Deleted index artifact: {item.name}")
                 except Exception as e:
                     logger.error(f"Failed deleting index artifact {item.name}: {e}")
+                    errors.append(f"{item.name}: {e}")
         index_dir.mkdir(parents=True, exist_ok=True)
 
         from slrag.api.ws_server import reset_retriever, get_session_manager
@@ -245,11 +271,20 @@ def create_app() -> FastAPI:
         mgr = get_session_manager()
         mgr.reset_all()
 
+        if errors:
+            raise HTTPException(status_code=500, detail="Reset incomplete: " + "; ".join(errors))
+        from slrag.ingest.indexer import HybridIndexer
+        try:
+            await asyncio.to_thread(HybridIndexer.run_pipeline, corpus_dir)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Sample re-indexing failed: {exc}") from exc
+        reset_retriever()
+
         return {
             "status": "ok",
-            "message": "All session data, corpus documents, and FAISS index have been completely reset.",
+            "message": "Custom uploads and sessions reset. Permanent sample retained and indexed.",
             "deleted": deleted,
-            "documents": [],
+            "documents": _corpus_documents(),
         }
 
 

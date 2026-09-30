@@ -70,3 +70,5 @@ additive_markers:
   - "too"
   - "in addition"
   - "and for"
+
+llm_tiebreak_timeout_ms: 5000

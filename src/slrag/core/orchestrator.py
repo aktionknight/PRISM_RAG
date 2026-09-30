@@ -45,7 +45,7 @@ class Orchestrator:
         logger.info(f"Chunk at {chunk.t_s}s -> Controller: {decision} ({decision_result.reason})")
 
         # 2. Decompose and Retrieve if needed
-        if decision.decision == ControllerDecisionType.RETRIEVE:
+        if decision == ControllerDecisionType.RETRIEVE:
             # 2a. Decompose
             logger.info("Decomposing intent...")
             new_candidates = await self.decomposer.decompose(
@@ -88,7 +88,7 @@ class Orchestrator:
                         )
                     self.intent_set.mark_dispatched(intent.intent_id)
 
-        return decision
+        return decision_result
 
     async def process_stream(self, stream: AsyncGenerator[TranscriptChunk, None]):
         """Process an entire stream of chunks."""

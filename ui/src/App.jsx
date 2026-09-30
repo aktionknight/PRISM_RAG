@@ -64,11 +64,17 @@ export default function App() {
   const [inputVal, setInputVal] = useState('');
   const [corpusDocs, setCorpusDocs] = useState([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [isQueryRunning, setIsQueryRunning] = useState(false);
   const [toast, setToast] = useState(null);
 
   const wsRef = useRef(null);
   const fileInputRef = useRef(null);
   const toastTimerRef = useRef(null);
+  const testRunRef = useRef(null);
+  const queryTimersRef = useRef([]);
+  const busy = isUploading || isTesting || isResetting || isQueryRunning;
 
 
   const streamPaneRef = useRef(null);
@@ -148,6 +154,14 @@ export default function App() {
 
     ws.onclose = () => {
       setStatus(STATUS_DISCONNECTED);
+      queryTimersRef.current.forEach(clearTimeout);
+      queryTimersRef.current = [];
+      setIsQueryRunning(false);
+      if (testRunRef.current) {
+        testRunRef.current = null;
+        setIsTesting(false);
+        showToast('Test interrupted: connection closed.', 'warn');
+      }
       setTimeout(connect, 2000);
     };
 
@@ -166,6 +180,10 @@ export default function App() {
       case 'session_created':
         setSessionId(msg.session_id);
         setStats(s => ({ ...s, sessionId: msg.session_id, sessionStartTime: Date.now() }));
+        if (testRunRef.current?.phase === 'awaiting_session') {
+          testRunRef.current.phase = 'answer';
+          sendText(testRunRef.current.prompt);
+        }
         break;
 
       case 'controller_decision':
@@ -185,7 +203,7 @@ export default function App() {
         setSubQueries(msg.sub_queries || []);
         setStats(s => ({
           ...s,
-          intentCount: msg.total_intents || (msg.sub_queries || []).length,
+          intentCount: msg.canonical_intents ?? 0,
           novelIntents: (msg.new_intents || []).length,
         }));
         break;
@@ -209,6 +227,7 @@ export default function App() {
         break;
 
       case 'answer_version': {
+        setIsQueryRunning(false);
         setStreamingTokens(currentTokens => {
           setHistory(prev => [
             ...prev,
@@ -244,6 +263,12 @@ export default function App() {
           synthesisLatency: tel.synthesis_latency_ms || 0,
           llmCallsThisTurn: tel.total_llm_calls || 0,
         }));
+        if (testRunRef.current?.phase === 'answer') {
+          testRunRef.current = null;
+          setIsTesting(false);
+          const grounded = Boolean(msg.answer?.trim() && msg.citations?.length);
+          showToast(grounded ? 'Test response received. Review the answer and citations.' : 'Test returned no grounded answer. Review the uncertainty message.', grounded ? 'success' : 'warn');
+        }
         break;
       }
 
@@ -261,6 +286,14 @@ export default function App() {
           }
           return nextS;
         });
+        break;
+
+      case 'error':
+        testRunRef.current = null;
+        setIsTesting(false);
+        setIsQueryRunning(false);
+        queryTimersRef.current.forEach(clearTimeout);
+        showToast(msg.message || 'Request failed.', 'warn');
         break;
 
       default:
@@ -301,14 +334,19 @@ export default function App() {
   };
 
   const resetSession = async () => {
+    setIsResetting(true);
     try {
       const res = await fetch('/api/corpus/reset', { method: 'POST' });
-      if (res.ok) {
-        const data = await res.json();
-        setCorpusDocs(data.documents || []);
-      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Reset failed');
+      setCorpusDocs(data.documents || []);
     } catch (e) {
       console.warn('Corpus reset endpoint failed:', e);
+      showToast(`Reset failed: ${e.message}`, 'warn');
+      await fetchCorpusDocs();
+      return;
+    } finally {
+      setIsResetting(false);
     }
 
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -347,15 +385,19 @@ export default function App() {
       fabricatedIds: 0,
       traceCoverage: 1.0,
     });
-    showToast('All sessions, documents, and FAISS vector index completely reset.', 'success');
+    showToast('Custom uploads and sessions reset. Permanent sample retained.', 'success');
   };
 
 
-  const sendQuery = () => {
-    const text = inputVal.trim();
+  const sendText = (query) => {
+    const text = query.trim();
     if (!text || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     setInputVal('');
+    setIsQueryRunning(true);
+    setSubQueries([]);
+    setRetrievals([]);
+    setStats(s => ({ ...s, intentCount: 0, retrievalCount: 0 }));
     setUncertainties([]);
     setHistory(prev => [...prev, { type: 'user', text }]);
 
@@ -369,7 +411,7 @@ export default function App() {
 
     let delay = 0;
     chunksToSend.forEach((chunkText, idx) => {
-      setTimeout(() => {
+      queryTimersRef.current.push(setTimeout(() => {
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
           wsRef.current.send(JSON.stringify({
             type: 'chunk',
@@ -378,24 +420,47 @@ export default function App() {
             is_final: idx === chunksToSend.length - 1,
           }));
         }
-      }, delay);
+      }, delay));
       delay += 600;
     });
 
-    setTimeout(() => {
+    queryTimersRef.current.push(setTimeout(() => {
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: 'utterance_end' }));
       }
-    }, delay + 200);
+    }, delay + 200));
   };
 
-  const runDemo = () => {
-    const demoText = "I need a large meeting room that can accommodate about 30 people, and also tell me about the cancellation policy and what catering options are available";
-    setInputVal(demoText);
-    setTimeout(() => {
-      // Small hack to ensure state updates before send
-      document.getElementById('sendBtn').click();
-    }, 100);
+  const sendQuery = () => sendText(inputVal);
+
+  const runTestSuite = async () => {
+    if (busy || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    setIsTesting(true);
+    testRunRef.current = { phase: 'preparing' };
+    showToast('Preparing the permanent sample for the test suite…');
+    try {
+      const res = await fetch('/api/test-suite/prepare', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Test preparation failed');
+      if (!testRunRef.current || wsRef.current?.readyState !== WebSocket.OPEN) {
+        throw new Error('Connection closed during test preparation');
+      }
+      setCorpusDocs(data.documents || []);
+      setChunks([]);
+      setSubQueries([]);
+      setRetrievals([]);
+      setStreamingTokens([]);
+      setFinalAnswer(null);
+      setCitations([]);
+      setUncertainties([]);
+      setHistory([]);
+      testRunRef.current = { phase: 'awaiting_session', prompt: data.prompt };
+      wsRef.current.send(JSON.stringify({ type: 'new_session' }));
+    } catch (error) {
+      testRunRef.current = null;
+      setIsTesting(false);
+      showToast(`Test suite failed: ${error.message}`, 'warn');
+    }
   };
 
   // Derived stats
@@ -421,7 +486,7 @@ export default function App() {
         <div className="header-right">
           <div
             className="corpus-badge"
-            title={`Corpus: ${corpusDocs.map(d => d.name + (d.is_sample ? ' (sample)' : '')).join(', ')}`}
+            title={`Corpus: ${corpusDocs.map(d => d.name + (d.is_permanent ? ' (permanent sample)' : d.is_sample ? ' (sample)' : '')).join(', ')}`}
           >
             <Icon name="file" size={12} />
             <span>{corpusDocs.length} Doc{corpusDocs.length === 1 ? '' : 's'}</span>
@@ -658,20 +723,20 @@ export default function App() {
           value={inputVal}
           onChange={e => setInputVal(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && sendQuery()}
-          disabled={isUploading}
+          disabled={busy}
         />
-        <button id="sendBtn" className="btn btn-primary" onClick={sendQuery} disabled={isUploading}>
+        <button id="sendBtn" className="btn btn-primary" onClick={sendQuery} disabled={busy}>
           <Icon name="send" size={14} />
           Send
         </button>
-        <button className="btn btn-demo" onClick={runDemo} disabled={isUploading}>
+        <button className="btn btn-secondary" onClick={runTestSuite} disabled={busy || status !== STATUS_CONNECTED} title="Run the sample prompt using the permanent reference document">
           <Icon name="play" size={12} />
-          Demo
+          {isTesting ? 'Running Test Suite…' : 'Run Test Suite'}
         </button>
         <button
           className="btn btn-secondary"
           onClick={() => fileInputRef.current?.click()}
-          disabled={isUploading}
+          disabled={busy}
           title="Upload custom markdown or text document to corpus"
         >
           <Icon name="upload" size={14} />
@@ -683,11 +748,11 @@ export default function App() {
           accept=".md,.txt,.markdown"
           style={{ display: 'none' }}
           onChange={handleFileUpload}
-          disabled={isUploading}
+          disabled={busy}
         />
-        <button className="btn btn-secondary" onClick={resetSession} disabled={isUploading} title="Complete reset: clear all sessions, documents, and FAISS vector index">
+        <button className="btn btn-secondary" onClick={resetSession} disabled={busy} title="Reset custom uploads and sessions; keep the permanent sample document">
           <Icon name="reset" size={14} />
-          Reset
+          {isResetting ? 'Resetting…' : 'Reset'}
         </button>
       </div>
 

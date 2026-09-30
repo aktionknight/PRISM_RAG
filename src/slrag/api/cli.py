@@ -3,10 +3,10 @@ api/cli.py — CLI entry point for the Streaming Live RAG engine.
 
 Commands:
   slrag index   --corpus ./corpus --out ./.index
-  slrag replay  --corpus ./corpus --stream ./bench/data/suite.jsonl --out ./runs/events.jsonl
+  slrag replay  --stream ./bench/data/golden_example.jsonl --out ./runs/events.jsonl
   slrag chat    --corpus ./corpus
   slrag listen  --corpus ./corpus --asr faster-whisper
-  slrag score   --run ./runs/events.jsonl --gold ./bench/data/gold.jsonl
+  slrag score   --run ./runs/answers.jsonl --corpus ./runs/chunks.jsonl
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def cmd_index(args: argparse.Namespace) -> None:
 
 
 def cmd_replay(args: argparse.Namespace) -> None:
-    """Replay a JSONL stream against the engine and produce events.jsonl."""
+    """Replay controller decisions; retrieval and synthesis are not implemented here."""
     import asyncio
     import json
     from slrag.core.schemas import TranscriptChunk
@@ -56,7 +56,7 @@ def cmd_replay(args: argparse.Namespace) -> None:
         stream_path = Path(args.stream)
         if not stream_path.exists():
             logger.error(f"Stream file not found: {stream_path}")
-            return
+            raise SystemExit(1)
             
         with open(stream_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -249,13 +249,18 @@ def cmd_serve(args: argparse.Namespace) -> None:
 def cmd_score(args: argparse.Namespace) -> None:
     """Score a run against gold standard."""
     run_path = Path(args.run)
-    gold_path = Path(args.gold)
+    corpus_path = Path(args.corpus)
+    gold_path = Path(args.gold) if args.gold else None
 
     if not run_path.exists():
         logger.error(f"Run file not found: {run_path}")
         sys.exit(1)
 
-    if not gold_path.exists():
+    if not corpus_path.is_file():
+        logger.error(f"Corpus chunks file not found: {corpus_path}")
+        sys.exit(1)
+
+    if gold_path is not None and not gold_path.exists():
         logger.error(f"Gold file not found: {gold_path}")
         sys.exit(1)
 
@@ -271,10 +276,13 @@ def cmd_score(args: argparse.Namespace) -> None:
         from bench.metrics import main as bench_main  # type: ignore
 
         # Call the bench.metrics main function with appropriate args
-        exit_code = bench_main([
+        score_args = [
             "--run", str(run_path),
-            "--gold", str(gold_path),
-        ])
+            "--corpus", str(corpus_path),
+        ]
+        if gold_path is not None:
+            score_args.extend(["--gold", str(gold_path)])
+        exit_code = bench_main(score_args)
         sys.exit(exit_code)
     except ImportError as e:
         logger.error(f"Could not import bench.metrics: {e}")
@@ -296,7 +304,7 @@ def main() -> None:
     p_index.set_defaults(func=cmd_index)
 
     # replay
-    p_replay = subparsers.add_parser("replay", help="Replay a JSONL stream")
+    p_replay = subparsers.add_parser("replay", help="Replay controller decisions (no answer synthesis)")
     p_replay.add_argument("--corpus", default="./corpus")
     p_replay.add_argument("--stream", required=True, help="JSONL stream file")
     p_replay.add_argument("--out", default="./runs/events.jsonl")
@@ -330,7 +338,8 @@ def main() -> None:
     # score
     p_score = subparsers.add_parser("score", help="Score a run against gold")
     p_score.add_argument("--run", required=True)
-    p_score.add_argument("--gold", required=True)
+    p_score.add_argument("--corpus", required=True, help="Corpus chunks JSONL (RetrievedChunk rows)")
+    p_score.add_argument("--gold", help="Optional gold JSONL")
     p_score.set_defaults(func=cmd_score)
 
     args = parser.parse_args()

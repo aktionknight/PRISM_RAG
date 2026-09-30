@@ -54,6 +54,12 @@ class RetrievalController:
 
         # --- Utterance End Safety ---
         if chunk.is_final:
+             # Presentation-only turns must still pass Stage 0 at utterance end.
+             # Clear the completed prefix even when no retrieval is dispatched.
+             decision = evaluate_suppression(prefix, t_s)
+             if decision:
+                 self.session.current_prefix = ""
+                 return decision
              self.session.last_retrieve_time = current_time_ms
              self.session.current_prefix = ""
              return ControllerDecision(

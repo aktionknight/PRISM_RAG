@@ -16,7 +16,7 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
-_PRICING_PATH = Path("config/pricing.yaml")
+_PRICING_PATH = Path(__file__).resolve().parents[3] / "config" / "pricing.yaml"
 
 
 @dataclass
@@ -74,10 +74,24 @@ def load_pricing(path: Path | None = None) -> dict:
         return yaml.safe_load(f) or {}
 
 
-def make_cost_accumulator(config: dict | None = None) -> CostAccumulator:
+def make_cost_accumulator(config: dict | None = None, *, model: str | None = None) -> CostAccumulator:
     """Create a cost accumulator with rates from config."""
-    pricing = config or load_pricing()
-    rates = pricing.get("llm", {})
+    pricing = config if config is not None else load_pricing()
+    rates = pricing.get("llm")
+    if rates is None:
+        if model is None:
+            from slrag.synth.config import load_synth_config
+            model = load_synth_config().get("generator", {}).get("openai_compatible", {}).get("model", "")
+        models = pricing.get("models", {})
+        selected = models.get(model)
+        if selected is None:
+            # Ollama separates model and tag with ':', while the pricing table uses '-'.
+            selected = models.get(model.replace(":", "-"))
+        selected = selected or {}
+        rates = {
+            "prompt_per_1k": selected.get("prompt_per_1k_tokens", 0.0),
+            "completion_per_1k": selected.get("completion_per_1k_tokens", 0.0),
+        }
     acc = CostAccumulator()
     acc._rates = rates
     return acc

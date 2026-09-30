@@ -199,6 +199,12 @@ class SynthesisEngine:
         if classification.turn_type == "CONSTRAINT_REFINEMENT":
             path = self._refine(turn, classification, telemetry)
         else:
+            # NEW_INTENT starts a new answer scope. Keep prior graph versions for
+            # history, but prevent their claims, constraints, or evidence mappings
+            # from leaking into this unrelated answer.
+            self.session_constraints.clear()
+            self._intents.clear()
+            self._intent_evidence.clear()
             path = self._new_intent(turn, classification, telemetry)
         async for item in path:
             yield item
@@ -216,7 +222,11 @@ class SynthesisEngine:
         self.session_constraints = merge_constraints(
             self.session_constraints, self.delta.extractor.extract(turn.utterance)
         )
-        evidence = {iid: list(chunks) for iid, chunks in turn.evidence.items()}
+        current_intent_ids = {intent.intent_id for intent in turn.sub_intents}
+        evidence = {
+            iid: list(turn.evidence.get(iid, ()))
+            for iid in current_intent_ids
+        }
         for intent in turn.sub_intents:
             self._intents[intent.intent_id] = intent
             self._intent_evidence.setdefault(intent.intent_id, []).extend(evidence.get(intent.intent_id, []))
@@ -235,6 +245,8 @@ class SynthesisEngine:
             yield event
 
         with self.graph.revise() as revision:
+            for prior in self.graph.active():
+                revision.supersede(prior.claim_id)
             for result in committed:
                 intent = self._intents.get(result.draft.intent_id or "")
                 facet = intent.facet if intent else result.draft.facet
@@ -507,7 +519,17 @@ class SynthesisEngine:
         }
         rows = self.coverage.build(intents, self._intent_evidence, active, claim_intents=claim_intents)
         questions = list(dict.fromkeys([*self.coverage.clarifications(rows), *self._turn_questions]))
-        uncertainty = " ".join(part for part in (self.coverage.uncertainty_text(rows), *questions) if part)
+        unverified_template = (
+            self.config.get("uncertainty", {}).get("templates", {}).get("unverified_claim", "")
+        )
+        unverified = list(dict.fromkeys(
+            unverified_template.format(claim=event.text)
+            for event in stream_events
+            if event.kind == "retracted" and event.text and unverified_template
+        ))
+        uncertainty = " ".join(
+            part for part in (self.coverage.uncertainty_text(rows), *questions, *unverified) if part
+        )
         self._uncertainty = uncertainty
         telemetry.add("coverage", _ms(started), self.coverage.to_telemetry(rows))
 
@@ -515,31 +537,9 @@ class SynthesisEngine:
 
         citations = answer_citations(display_active)
         raw_answer = render_claims(display_active, config=self.config)
-        if display_active and hasattr(self.generator, "client") and self.generator.client:
-            prompt = (
-                "You are an assistant. Rewrite the following facts into a single cohesive, "
-                "natural-sounding paragraph. Keep every citation marker EXACTLY as it appears "
-                "in the text (e.g. [Doc_1 §1]). Do not invent any new facts or drop any citations.\n\n"
-            ) + raw_answer
-            render_started = time.perf_counter()
-            prompt_tokens, completion_tokens = len(prompt.split()), 0
-            try:
-                resp = await self.generator.client.complete(prompt)
-                if resp:
-                    prompt_tokens = getattr(resp, "prompt_tokens", prompt_tokens)
-                    completion_tokens = getattr(resp, "completion_tokens", 0)
-                if resp and resp.text:
-                    from slrag.core.citations import find_markers
-                    _, markers = find_markers(resp.text)
-                    rewritten_labels = {lbl for labels in markers for lbl in labels}
-                    if set(citations).issubset(rewritten_labels):
-                        raw_answer = resp.text
-            except Exception:
-                pass
-            telemetry.add("render", _ms(render_started), {
-                "llm_calls": 1, "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-            })
+        # The claims have already passed citation and entailment checks. A second
+        # free-form LLM rewrite could add unsupported facts while preserving the
+        # same citation markers, so render the verified claim graph directly.
 
         output = build_answer_output(
             session_id=self.session_id,
@@ -645,6 +645,12 @@ class _Telemetry:
              "first_draft_ms": usage.first_draft_ms,
              "sentences": len(results), "committed": sum(r.ok for r in results),
              "retracted": sum(not r.ok for r in results),
+             "verifier_backend": verifier.config.get("verifier", {}).get("entailment_backend", "lexical"),
+             "entailment_threshold": verifier.threshold,
+             "verification": [
+                 {"seq": r.draft.seq, "text": r.text, "ok": r.ok,
+                  "entailment": r.entailment, "reasons": list(r.reasons)} for r in results
+             ],
              "fabricated_ids_stripped": verifier.fabricated_ids_stripped},
         )
 

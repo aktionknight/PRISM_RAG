@@ -117,7 +117,8 @@ class Decomposer:
             except Exception as e:
                 logger.warning(f"spaCy pipeline unavailable ({e}); syntactic splitting disabled. Run `make setup`.")
 
-        self.llm_url = "http://127.0.0.1:11434/v1/chat/completions"
+        import os
+        self.llm_url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/v1/chat/completions")
 
     # ── Config helpers ──────────────────────────────────────────────
 
@@ -233,6 +234,13 @@ class Decomposer:
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
+                        usage = data.get("usage", {})
+                        from slrag.telemetry.metrics import record_llm_call
+                        record_llm_call(
+                            component="decomposer",
+                            prompt_tokens=int(usage.get("prompt_tokens", 0)),
+                            completion_tokens=int(usage.get("completion_tokens", 0)),
+                        )
                         content = data["choices"][0]["message"]["content"]
 
                         # Strip markdown fences if present

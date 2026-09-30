@@ -1,4 +1,7 @@
 PYTHON ?= .venv/bin/python
+RUN ?=
+CORPUS ?=
+GOLD ?=
 
 .PHONY: up grafana setup setup-nli index replay bench score test test-nli lint clean bench-c4 calibrate-nli ablate ablate-a3
 
@@ -20,15 +23,15 @@ setup-nli: setup      ## Component 4 NLI verifier: deps + weights baked at build
 index:                ## build hybrid index + Phase 0 facet discovery from ./corpus (any corpus)
 	$(PYTHON) -m slrag.api.cli index --corpus ./corpus
 
-replay:               ## golden replay through the harness
+replay:               ## controller-only replay of the example stream
 	$(PYTHON) -m slrag.api.cli replay --stream ./bench/data/golden_example.jsonl --out ./runs/events.jsonl
 
-bench:                ## full benchmark suite
-	$(PYTHON) -m slrag.api.cli replay --stream ./bench/data/suite.jsonl --out ./runs/events.jsonl
-	$(PYTHON) -m slrag.api.cli score --run ./runs/events.jsonl --gold ./bench/data/gold.jsonl
+bench: score          ## score caller-supplied answered-turn records; controller replay is not a synthesis benchmark
 
 score:
-	$(PYTHON) -m slrag.api.cli score --run ./runs/events.jsonl --gold ./bench/data/gold.jsonl
+	$(if $(strip $(RUN)),,$(error Supply RUN=<answered-turn JSONL>; controller replay events cannot be scored))
+	$(if $(strip $(CORPUS)),,$(error Supply CORPUS=<RetrievedChunk JSONL>))
+	$(PYTHON) -m slrag.api.cli score --run "$(RUN)" --corpus "$(CORPUS)" $(if $(strip $(GOLD)),--gold "$(GOLD)")
 
 test:
 	$(PYTHON) -m pytest -q

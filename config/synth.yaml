@@ -43,12 +43,15 @@ generator:
 # Verifier (synth/verifier.py) — S-6 allowlist backstop + S-5 two-pass streaming
 # ---------------------------------------------------------------------------
 verifier:
-  entailment_backend: lexical         # lexical | cross_encoder
+  entailment_backend: cross_encoder   # local NLI validates paraphrases and factual relationships
   entailment_threshold: 0.6           # cited chunk |= sentence
   copy_check: true                    # numerals/dates/currency/entities must appear in a cited chunk
+  source_attribution_patterns:        # remove query-supplied provenance wrappers, never factual content
+    - '^\s*according\s+to\s+(?P<source>[^,;.!?]+),\s*'
+    - '\s+according\s+to\s+(?P<source>[^,;.!?]+?)(?P<end>[.!?]?)$'
   reattribute_on_failure: true        # try other in-context chunks before retracting
   demote_on_fabricated: true          # A §4.4: a fabricated ID demotes its sentence (no re-attribution rescue)
-  polarity_check: true                # entailing clause and sentence must agree on negation (lexical scorer is blind to it)
+  polarity_check: false               # NLI checks meaning/negation; enable this heuristic with the lexical backend
   # Negation cues are NLTK's list (nltk.sentiment.util.NEGATION); these closed-class cues it omits are added.
   negation_extra: [without, nor, neither, cannot, nobody]
   negation_exempt:                    # cue phrases that are not negations (audit N-1)
@@ -83,6 +86,7 @@ uncertainty:
     uncovered: "{facet_label} could not be verified from the retrieved corpus."
     entity_gap: "{facet_label} for {entity} could not be verified from the retrieved corpus."
     clarification: "Could you clarify whether you mean {option_a} or {option_b}?"
+    unverified_claim: "This statement could not be verified from the retrieved corpus: {claim}"
     full_coverage_caveat: ""          # brief prefers an honest caveat; empty keeps it silent
 
 # ---------------------------------------------------------------------------

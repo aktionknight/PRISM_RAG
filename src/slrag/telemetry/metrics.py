@@ -106,10 +106,14 @@ def record_retrieval(trigger: str, latency_s: float) -> None:
     RETRIEVAL_LATENCY.observe(latency_s)
 
 
-def record_llm_call(component: str, prompt_tokens: int, completion_tokens: int) -> None:
+def record_llm_call(
+    component: str, prompt_tokens: int, completion_tokens: int, calls: int = 1
+) -> None:
     if not HAS_PROMETHEUS:
         return
-    LLM_CALLS.labels(component=component).inc()
+    if calls <= 0:
+        return
+    LLM_CALLS.labels(component=component).inc(calls)
     LLM_TOKENS.labels(type="prompt").inc(prompt_tokens)
     LLM_TOKENS.labels(type="completion").inc(completion_tokens)
 
@@ -118,9 +122,12 @@ def record_answer_version(claims_retained: int, claims_superseded: int, claims_a
     if not HAS_PROMETHEUS:
         return
     ANSWER_VERSIONS.inc()
-    CLAIMS_TOTAL.labels(status="retained").inc(claims_retained)
-    CLAIMS_TOTAL.labels(status="superseded").inc(claims_superseded)
-    CLAIMS_TOTAL.labels(status="added").inc(claims_added)
+    for status, count in (
+        ("retained", claims_retained),
+        ("superseded", claims_superseded),
+        ("added", claims_added),
+    ):
+        CLAIMS_TOTAL.labels(status=status).inc(count)
 
 
 def set_active_sessions(count: int) -> None:
@@ -133,6 +140,12 @@ def set_citation_support_rate(rate: float) -> None:
     if not HAS_PROMETHEUS:
         return
     CITATION_SUPPORT_RATE.set(rate)
+
+
+def record_fabricated_ids(count: int) -> None:
+    if not HAS_PROMETHEUS or count <= 0:
+        return
+    FABRICATED_IDS.inc(count)
 
 
 def metrics_response() -> tuple[bytes, str]:

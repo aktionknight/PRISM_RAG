@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Optional
 
 import numpy as np
@@ -139,6 +140,11 @@ class IntentSet:
                                 continue
 
                             is_duplicate = True
+                            # Keep callers' candidate lists linked to the existing
+                            # evidence instead of a fresh, undispatched identity.
+                            candidate.intent_id = existing_intent.intent_id
+                            candidate.novel = False
+                            candidate.status = existing_intent.status
                             logger.info(
                                 f"Intent deduplicated (sim={sim:.3f}): "
                                 f"'{candidate.search_string}' matches existing "
@@ -201,6 +207,21 @@ class IntentSet:
                             logger.warning(f"Failed to emit intent_superseded telemetry: {e}")
 
         return novel_intents
+
+    async def retire_omitted_from_final_scope(
+        self, *, observed_ids: set[str], final_ids: set[str]
+    ) -> list[str]:
+        """Retire intents seen during partial streaming but absent from the final decomposition."""
+        retired = []
+        async with self._lock:
+            for intent_id in observed_ids - final_ids:
+                intent = self.session.intent_set.get(intent_id)
+                if intent is None or intent.status == IntentStatus.superseded:
+                    continue
+                intent.status = IntentStatus.superseded
+                intent.superseded_by = None
+                retired.append(intent_id)
+        return retired
 
     def get_pending(self) -> list[SubIntent]:
         """Return all undispatched intents."""

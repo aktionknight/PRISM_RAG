@@ -149,6 +149,7 @@ class PipelineSession:
     total_tokens_completion: int = 0
     total_cost_usd: float = 0.0
     total_llm_calls: int = 0
+    turn_intent_ids: set[str] = field(default_factory=set)
 
     @property
     def decomposer(self):
@@ -276,6 +277,8 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
     text = chunk_data.get("text", "")
     is_final = chunk_data.get("is_final", False)
 
+    if not session.prefix:
+        session.turn_intent_ids.clear()
     session.prefix += text
     chunk = TranscriptChunk(t_s=t_s, text=text, is_final=is_final)
 
@@ -397,6 +400,13 @@ async def _process_chunk(session: PipelineSession, chunk_data: dict, ws: WebSock
         except Exception:
             logger.exception("IntentSet dedup failed; refusing duplicate retrieval dispatch")
             raise
+
+        session.turn_intent_ids.update(intent.intent_id for intent in all_candidates)
+        if is_final:
+            await session.intent_set.retire_omitted_from_final_scope(
+                observed_ids=session.turn_intent_ids,
+                final_ids={intent.intent_id for intent in all_candidates},
+            )
 
         decomp_latency_ms = (time.perf_counter() - decomp_start) * 1000
 
@@ -735,6 +745,7 @@ async def _process_utterance_end(session: PipelineSession, ws: WebSocket) -> Non
     session.state.controller.last_retrieve_time = -1000.0
     if hasattr(session, 'current_candidates'):
         session.current_candidates.clear()
+    session.turn_intent_ids.clear()
 
 
 # ── WebSocket Endpoint ──────────────────────────────────────────────

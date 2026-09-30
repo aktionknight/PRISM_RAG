@@ -94,7 +94,7 @@ export default function MetricsPanel({ telemetryData, sessionStats }) {
       {/* Gate Readouts — G1-G6 */}
       <MetricCard title="Gate Readouts" icon="target">
         <GateItem label="G2 Early Retrieval" pass={g2Pass} value={`${earlyRetrievalRate}%`} />
-        <GateItem label="G3 Intent Decomposition" pass={g3Pass} value={`${stats.intentCount || 0} intents`} />
+        <GateItem label="G3 Intent Decomposition" pass={g3Pass} value={`${stats.intentCount || 0} this turn`} />
         <GateItem label="G4 Citation Support" pass={g4Pass} value={`${citationSupportRate}%`} />
         <GateItem label="G5 Session State" pass={g5Pass} value={`V${stats.answerVersion || 0}`} />
         <GateItem label="G6 Trace Coverage" pass={g6Pass} value={`${((metrics.traceCoverage || 0) * 100).toFixed(1)}%`} />
@@ -131,7 +131,7 @@ export default function MetricsPanel({ telemetryData, sessionStats }) {
       <MetricCard title="Pipeline Statistics" icon="chart">
         <StatGrid>
           <StatItem label="Retrievals" value={stats.retrievalCount || 0} color="green" />
-          <StatItem label="Sub-Intents" value={stats.intentCount || 0} color="indigo" />
+          <StatItem label="Final Sub-Intents" value={stats.intentCount || 0} color="indigo" />
           <StatItem label="Claims" value={stats.claimCount || 0} color="cyan" />
           <StatItem label="Events" value={stats.telemetryEventCount || 0} color="amber" />
         </StatGrid>

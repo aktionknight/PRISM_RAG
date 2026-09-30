@@ -31,7 +31,7 @@ services:
   # ── Observability Stack (opt-in via --profile obs) ──
   prometheus:
     image: prom/prometheus:v2.51.0
-    profiles: ["obs"]
+    
     ports:
       - "9090:9090"
     volumes:
@@ -44,7 +44,7 @@ services:
 
   grafana:
     image: grafana/grafana:11.1.0
-    profiles: ["obs"]
+    
     ports:
       - "3000:3000"
     environment:
@@ -64,3 +64,20 @@ services:
 volumes:
   prometheus_data:
   grafana_data:
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+
+  ollama_data:

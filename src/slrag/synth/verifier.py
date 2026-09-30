@@ -24,6 +24,7 @@ import re
 import threading
 import time
 from collections import deque
+from functools import lru_cache
 from typing import Any, AsyncIterable, AsyncIterator, Callable, Iterable, Protocol, Sequence
 
 from slrag.core.citations import find_markers, label_for_chunk, normalize_label
@@ -185,17 +186,23 @@ class CrossEncoderNLIScorer:
         return self.score_batch([(premise, hypothesis)])[0]
 
     def score_batch(self, pairs: Sequence[tuple[str, str]]) -> list[float]:
-        """Entailment per pair = max over the premise's sentence windows, in one ``predict`` call.
+        """Entailment per pair = max over bounded sentence windows, in one ``predict`` call.
 
         A short claim scored against a whole multi-sentence chunk is often judged
         neutral or contradicted by the chunk's other sentences ("Venue A holds up to
         40 people." vs a three-sentence chunk: P(entail) ~ 0.001), so each window of
-        up to ``premise_window_sentences`` consecutive sentences is scored too.
+        up to ``premise_window_sentences`` consecutive sentences is scored. Setting
+        that option to zero explicitly selects whole-premise scoring instead.
         """
         expanded: list[tuple[str, str]] = []
         owners: list[int] = []
         for n, (premise, hypothesis) in enumerate(pairs):
-            for window in premise_windows(premise, self._window):
+            windows = premise_windows(premise, self._window)
+            # Score the configured evidence units, rather than also accepting an
+            # unbounded chunk that may conflate unrelated subjects across sentences.
+            if self._window > 0 and len(split_sentences(premise)) > self._window:
+                windows = [window for window in windows if window != premise]
+            for window in windows:
                 expanded.append((window, hypothesis))
                 owners.append(n)
         best = [0.0] * len(pairs)
@@ -245,8 +252,27 @@ def make_scorer(config: dict[str, Any] | None = None) -> EntailmentScorer:
     if backend == "lexical":
         return LexicalEntailmentScorer(config)
     if backend == "cross_encoder":
-        return CrossEncoderNLIScorer(config)
+        opts = config.get("verifier", {}).get("cross_encoder", {})
+        if not opts.get("model_path"):
+            return CrossEncoderNLIScorer(config)  # preserve the actionable missing-model error
+        return _shared_nli_scorer(
+            str(resolve_path(opts["model_path"])),
+            tuple(opts.get("labels", ("contradiction", "entailment", "neutral"))),
+            int(opts.get("max_length", 256)),
+            int(opts.get("premise_window_sentences", 2)),
+        )
     raise ValueError(f"unknown verifier.entailment_backend {backend!r} (expected 'lexical' or 'cross_encoder')")
+
+
+@lru_cache(maxsize=2)
+def _shared_nli_scorer(
+    model_path: str, labels: tuple[str, ...], max_length: int, window: int
+) -> CrossEncoderNLIScorer:
+    """Reuse immutable local model weights across sessions; predictions use the scorer's lock."""
+    return CrossEncoderNLIScorer({"verifier": {"cross_encoder": {
+        "model_path": model_path, "labels": labels,
+        "max_length": max_length, "premise_window_sentences": window,
+    }}})
 
 
 # ---------------------------------------------------------------------------
@@ -413,6 +439,10 @@ class ClaimVerifier:
         cfg = self.config.get("verifier", {})
         self.threshold = threshold_for(self.config)
         self.copy_check_enabled = bool(cfg.get("copy_check", True))
+        self._attribution_patterns = [
+            re.compile(pattern, re.IGNORECASE)
+            for pattern in cfg.get("source_attribution_patterns", ())
+        ]
         self.reattribute_on_failure = bool(cfg.get("reattribute_on_failure", True))
         self.demote_on_fabricated = bool(cfg.get("demote_on_fabricated", True))
         self.polarity = PolarityCheck(self.config) if cfg.get("polarity_check", True) else None
@@ -427,6 +457,9 @@ class ClaimVerifier:
     def verify(self, draft: DraftClaim) -> VerificationResult:
         started = time.perf_counter()
         text, in_text, in_text_fabricated = self.allowlist.strip_markers(draft.text)
+        factual_text = self._without_query_attribution(text)
+        attribution_removed = factual_text != text
+        text = factual_text
         kept, fabricated = self.allowlist.filter((*draft.citations, *in_text, *in_text_fabricated))
         cited = [chunk for label in kept for chunk in self.allowlist.chunks_for(label)]
 
@@ -451,9 +484,10 @@ class ClaimVerifier:
                 if missing:
                     reasons.append("copy_check_failed:" + ",".join(missing))
 
-        # A §4.4 / S-6 layer 3: a fabricated ID is stripped AND its sentence demoted to
-        # uncertainty — a model that invented a source is not trusted on that sentence.
-        demote = bool(fabricated) and self.demote_on_fabricated
+        # Strip fabricated labels. If the claim also has an allowlisted citation,
+        # assess it against that evidence; sentence-level drafts keep unrelated
+        # supported facts from being lost with one fabricated label.
+        demote = bool(fabricated) and self.demote_on_fabricated and not cited
         if demote:
             reasons.insert(0, "fabricated_citation")
         ok, reattributed = not reasons, False
@@ -472,11 +506,9 @@ class ClaimVerifier:
                 best = candidate_best if best is None else max(best, candidate_best)
                 reasons.append("reattribution_failed")
         if not ok:
-            # USER COMMAND: cited claims are put into the final answers, ONLY uncited/hallucinated are uncertain
-            if citations and "fabricated_citation" not in reasons:
-                ok = True
-            else:
-                supporting = ()
+            supporting = ()
+        if attribution_removed:
+            reasons.append("query_source_attribution_removed")
 
         with self._lock:
             self.verified += 1
@@ -502,6 +534,28 @@ class ClaimVerifier:
     def output_fabricated_count(self, citations: Iterable[str]) -> int:
         """Emitted labels outside the allowlist (exact canonical match) — the CI metric, must be 0."""
         return sum(1 for label in citations if label not in self.allowlist.labels)
+
+    def _without_query_attribution(self, text: str) -> str:
+        """A source named in the question is provenance, not part of the factual assertion.
+
+        Only remove a configured wrapper when its exact source is also introduced
+        by 'according to' in the user's question. Unknown source names stay subject
+        to verification, and the remaining assertion still needs supporting evidence.
+        """
+        for pattern in self._attribution_patterns:
+            match = pattern.search(text)
+            if match is None:
+                continue
+            source = re.sub(r"^the\s+", "", match.group("source").strip(), flags=re.IGNORECASE)
+            source_words = r"\s+".join(map(re.escape, source.split()))
+            query_source = r"\baccording\s+to\s+(?:the\s+)?" + source_words + r"(?=\s*[,;.!?]|$)"
+            if not source or not re.search(query_source, self.exempt, re.IGNORECASE):
+                continue
+            replacement = match.groupdict().get("end", "") or ""
+            candidate = _tidy(text[:match.start()] + replacement + text[match.end():])
+            if candidate:
+                text = candidate
+        return text
 
     def _scores(self, chunks: Sequence[RetrievedChunk], sentence: str) -> list[float]:
         pairs = [(chunk.text, sentence) for chunk in chunks]

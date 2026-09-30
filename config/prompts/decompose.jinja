@@ -13,6 +13,7 @@ Given the current transcript prefix, decompose it into distinct, self-contained 
 5. Generate an optimised search_string for each sub-query (keywords, not a sentence).
 6. Emit a dictionary of extracted slots for constraints (e.g., {"attendees": 30}).
 7. Output the user's FINAL intended intent set for the full prefix. If an intent revises or corrects a previous intent from the "Already Identified Intents" list, include the ID of the old intent in the `supersedes` list.
+8. Apply the latest scope changes, exclusions, and retractions across the full prefix. Do not emit a sub-intent for a request the user later excludes, and do not turn an instruction not to include information into a search request for that information. Keep the remaining requested intents.
 
 ## Current Transcript Prefix
 {{ prefix }}
