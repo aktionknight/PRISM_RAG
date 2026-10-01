@@ -26,6 +26,7 @@ services:
       interval: 10s
       timeout: 3s
       retries: 3
+      start_period: 5m  # Corpus indexing runs before the HTTP server starts.
 
   # Observability services start with the default stack.
   prometheus:
@@ -66,7 +67,13 @@ services:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-    # CPU works by default; GPU acceleration can be added in a local override.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
 volumes:
   prometheus_data:

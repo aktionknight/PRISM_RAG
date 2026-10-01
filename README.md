@@ -66,7 +66,7 @@ System behaviors, controller thresholds, and model endpoints are centralized in 
 ### Running the System
 
 **Method 1: Complete Evaluator Docker Stack (Recommended)**
-The Windows startup script starts the FastAPI engine, built Web UI, Prometheus, Grafana, and Ollama backend. The engine image downloads and verifies its NLP, embedding, reranker and NLI resources during the build.
+The Windows startup script starts the FastAPI engine, built Web UI, Prometheus, Grafana, and Ollama backend. The engine image downloads and verifies its NLP, embedding, reranker and NLI resources during the build. The default Compose stack reserves NVIDIA GPUs for Ollama; the host needs compatible NVIDIA drivers and container GPU support.
 
 ```powershell
 # Open PowerShell as Administrator (if required for Docker) and run:
@@ -83,7 +83,18 @@ This single command will:
 On other platforms, run `docker compose up --build -d`, then
 `docker compose exec ollama ollama pull qwen2.5:7b-instruct`.
 The Ollama model pull is a separate setup step; it is not baked into the engine image.
-CPU execution is the default. GPU use requires a local Compose override.
+The engine entrypoint builds BM25, FAISS and corpus facets from the mounted
+`corpus/` before starting the HTTP server. It rebuilds on each container start
+so the persisted `.index/` matches the current corpus. An empty corpus, failed
+build, or missing/empty/corrupt FAISS index prevents the server from starting.
+No corpus index is baked into the image. Initial startup includes indexing time;
+use `docker compose logs -f engine` to monitor progress.
+
+Ollama uses the reserved NVIDIA GPU when its model fits the available GPU memory.
+After pulling the model, check `docker compose exec ollama ollama ps` while a
+request is running to inspect actual CPU/GPU placement. CPU-only hosts require
+explicitly removing the device reservation in a local Compose configuration;
+CPU execution of the default 7B model may exceed the existing request timeouts.
 
 **Method 2: Local Development Setup**
 If you prefer to run the components separately for development:

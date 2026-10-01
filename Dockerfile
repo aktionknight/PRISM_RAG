@@ -26,6 +26,7 @@ RUN pip install --no-cache-dir -e ".[dev,nli]"
 # if any required download or label-order check fails.
 COPY config/ config/
 COPY scripts/bake_nli_model.py scripts/bake_nli_model.py
+COPY scripts/docker_start.py scripts/docker_start.py
 RUN python scripts/bake_nli_model.py --nltk --spacy
 RUN python scripts/bake_nli_model.py --nltk --spacy --check
 
@@ -45,4 +46,5 @@ COPY --from=ui-build /app/ui/dist /app/ui/dist
 
 EXPOSE 8000
 
+ENTRYPOINT ["python", "scripts/docker_start.py"]
 CMD ["uvicorn", "slrag.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
