@@ -1,13 +1,29 @@
+ifeq ($(OS),Windows_NT)
+PYTHON ?= .venv/Scripts/python.exe
+else
 PYTHON ?= .venv/bin/python
+endif
 RUN ?=
 CORPUS ?=
 GOLD ?=
 
-.PHONY: up grafana setup setup-nli index replay bench score test test-nli lint clean bench-c4 calibrate-nli ablate ablate-a3
+.PHONY: up down serve help grafana setup setup-nli models-check index replay bench score test test-golden test-nli lint clean bench-c4 calibrate-nli
 
 # Default target
 up:
 	docker compose up
+
+down:                 ## stop the Docker stack, preserving model and dashboard volumes
+	docker compose down
+
+serve:                ## start the backend for local development
+	$(PYTHON) -m slrag.api.cli serve --reload
+
+help:                 ## list supported workflows
+	@echo "up down serve grafana setup setup-nli models-check index replay bench score test test-golden test-nli lint clean bench-c4 calibrate-nli"
+
+models-check:         ## verify baked NLI, spaCy and NLTK resources without downloading
+	$(PYTHON) scripts/bake_nli_model.py --nltk --spacy --check
 
 grafana:              ## start local Grafana with iframe embedding enabled
 	$(PYTHON) -m slrag.api.cli grafana
@@ -36,24 +52,19 @@ score:
 test:
 	$(PYTHON) -m pytest -q
 
-test-nli:             ## golden replay + calibration pairs on the real cross-encoder (needs setup-nli)
-	SLRAG_NLI=1 $(PYTHON) -m pytest -q tests/synth/test_nli_backend.py
+test-golden:          ## self-correction regression and unrelated held-out corpus
+	$(PYTHON) -m pytest -q tests/test_golden_streaming.py tests/synth/test_heldout.py
+
+test-nli:             ## held-out support/contradiction check on the real cross-encoder (needs setup-nli)
+	$(PYTHON) -c "import os, pytest; os.environ['SLRAG_NLI']='1'; raise SystemExit(pytest.main(['-q', 'tests/synth/test_nli_backend.py']))"
 
 lint:
 	$(PYTHON) -m ruff check src/ tests/
 
-bench-c4:             ## Component 4 golden replay -> run records -> G4/G5 gates (non-zero exit on failure)
-	$(PYTHON) -m bench.replay_c4 --out runs/c4_golden.jsonl
-	$(PYTHON) -m bench.metrics --run runs/c4_golden.jsonl --corpus tests/fixtures/fixture_chunks.jsonl --gate
+bench-c4: test-golden ## available Component 4 regressions; no statistical gate-rate claim
 
 calibrate-nli:        ## sweep verifier.entailment_threshold on golden + adversarial pairs (needs setup-nli)
 	$(PYTHON) -m bench.calibrate_nli --pairs bench/data/nli_calibration.jsonl
 
-ablate: ablate-a3     ## ablations (A3 implemented; A1/A2/A4 owned by Components 1-3)
-
-ablate-a3:            ## A3: delta refinement vs full restart on the golden refinement scenario
-	$(PYTHON) -m bench.ablate_refinement
-
 clean:
-	rm -rf .index/ runs/ .pytest_cache
-	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	$(PYTHON) -c "from pathlib import Path; import shutil; [shutil.rmtree(p) for p in (Path('.index'), Path('runs'), Path('.pytest_cache')) if p.exists()]; [shutil.rmtree(p) for root in ('src', 'tests', 'bench', 'scripts') for p in Path(root).rglob('__pycache__')]"

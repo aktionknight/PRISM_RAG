@@ -1,9 +1,6 @@
-# Docker Compose — profiles: core (default) | obs (Grafana + Prometheus + Tempo)
-#
-# Usage:
-#   docker compose up                          # core engine + UI only
-#   docker compose --profile obs up            # + Grafana dashboard
-#   docker compose --profile obs --profile ui up
+# Docker Compose: engine with built UI, Ollama, Prometheus and Grafana.
+# Usage: docker compose up --build
+# Then: docker compose exec ollama ollama pull qwen2.5:7b-instruct
 
 services:
   # ── Core SLRAG Engine ──
@@ -20,15 +17,17 @@ services:
       - ./.index:/app/.index
     environment:
       - PYTHONUNBUFFERED=1
-    command: >
-      uvicorn slrag.api.app:create_app --factory --host 0.0.0.0 --port 8000 --reload
+      - OLLAMA_URL=http://ollama:11434/v1/chat/completions
+      - OLLAMA_BASE_URL=http://ollama:11434/v1
+    depends_on:
+      - ollama
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 10s
       timeout: 3s
       retries: 3
 
-  # ── Observability Stack (opt-in via --profile obs) ──
+  # Observability services start with the default stack.
   prometheus:
     image: prom/prometheus:v2.51.0
     
@@ -61,23 +60,15 @@ services:
     depends_on:
       - prometheus
 
-volumes:
-  prometheus_data:
-  grafana_data:
-
   ollama:
     image: ollama/ollama:latest
     ports:
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # CPU works by default; GPU acceleration can be added in a local override.
 
-
+volumes:
+  prometheus_data:
+  grafana_data:
   ollama_data:

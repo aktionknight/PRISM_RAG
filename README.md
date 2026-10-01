@@ -1,7 +1,7 @@
 <img width="1917" height="912" alt="image" src="https://github.com/user-attachments/assets/9195d22c-7e85-467d-a7ca-29ca39d2d108" />
 # PRISM RAG: Streaming Live RAG System
 
-PRISM RAG (Streaming Live RAG) is a high-performance, real-time Retrieval-Augmented Generation engine designed for sub-second responsiveness, minimal LLM cost, and strictly verifiable provenance. 
+PRISM RAG (Streaming Live RAG) is a Retrieval-Augmented Generation engine designed for streaming queries, bounded LLM use, and verifiable provenance. Measured performance status is documented in the evaluation report.
 
 It treats incoming utterances as continuous event streams, allowing it to begin retrieval while the user is still speaking.
 
@@ -15,7 +15,7 @@ Run the project with : .\start.ps1 (from project root) or follow steps in the RE
 
 ## Key Features
 
-- **Speculative Retrieval Cascade:** A 5-stage early-exit controller that triggers retrieval aggressively (< 15 ms p95) using a BM25 discriminativeness probe, before the sentence even finishes. Cancelled speculative branches cost zero context window tokens.
+- **Speculative Retrieval Cascade:** A 5-stage early-exit controller uses a BM25 discriminativeness probe to start retrieval before the sentence finishes. Cancelled branches can populate the evidence pool for reuse.
 - **Multi-Intent Decomposition:** Safely unrolls compound queries into monotonic intent sets with facet-keyed diffing, preventing over-fragmentation and redundant API calls.
 - **Facet-Quota Fusion:** Dynamically allocates context budget across distinct sub-intents to prevent dense paragraphs from starving specific policy or eligibility details.
 - **Claim Graph Refinement:** Answers are held as a graph of typed claims. Late constraints (e.g. "Wait, actually for 50 people") cause a surgical graph mutation rather than a full pipeline restart.
@@ -30,16 +30,16 @@ The PRISM system bypasses traditional vector database infrastructure to remain s
 - **LLM Engine:** Local Open-Source Models (e.g., Llama-3, Qwen) using `vLLM` / `Ollama`.
 
 For more in-depth architectural details and design decisions, please review:
-- [System Architecture Brief](./System_Architecture_Brief.md)
-- [Benchmarking & Evaluation Report](./Benchmarking_and_Evaluation_Report.md)
+- [System Architecture Brief](./SYSTEM_ARCHITECTURE.md)
+- [Benchmarking & Evaluation Report](./BENCHMARK+EVAL.md)
 - [Final Architecture Specs](./markdowns/globals/A_FINAL_ARCHITECTURE.md)
 
 ## Getting Started
 
 ### Prerequisites
-- Python 3.10+
+- Python 3.11+
 - `uv` (recommended for fast virtual environments)
-- Docker (optional, for observability stack)
+- Docker with Compose (for the container stack)
 
 ### Installation
 
@@ -51,7 +51,8 @@ cd PRISM_RAG
 # Create a virtual environment and install dependencies
 uv venv
 source .venv/bin/activate  # Or .venv\Scripts\activate on Windows
-uv pip install -e .
+uv pip install -e ".[dev,nli]"
+python scripts/bake_nli_model.py --nltk --spacy
 ```
 
 ### Configuration
@@ -62,16 +63,25 @@ System behaviors, controller thresholds, and model endpoints are centralized in 
 
 ### Running the System
 
-**Method 1: All-in-One Docker Container (Recommended)**
-The entire application (FastAPI Engine, React UI, and local Ollama LLM) can be built and run in a single, self-contained Docker container.
-```bash
-# Build the all-in-one image (this will download the Qwen2.5 7B model during build)
-docker build -t prism-rag .
+**Method 1: Complete Evaluator Docker Stack (Recommended)**
+The Windows startup script starts the FastAPI engine, built Web UI, Prometheus, Grafana, and Ollama backend. The engine image downloads and verifies its NLP, embedding, reranker and NLI resources during the build.
 
-# Run the container
-docker run -p 8000:8000 -p 11434:11434 -v ./corpus:/app/corpus -v ./config:/app/config prism-rag
+```powershell
+# Open PowerShell as Administrator (if required for Docker) and run:
+.\start.ps1
 ```
-The server and UI will be available at `http://localhost:8000`.
+This single command will:
+1. Boot up the entire architecture via `docker-compose.yml`.
+2. Wait for the local Ollama LLM container to initialize.
+3. Automatically pull the required **Qwen 2.5 7B** model.
+4. Output the URLs for the Web UI (`localhost:8000`), Grafana (`localhost:3000`), and Prometheus (`localhost:9090`).
+
+*(Note: Grafana's default credentials are `admin` / `slrag`. Anonymous viewing is enabled by default).*
+
+On other platforms, run `docker compose up --build -d`, then
+`docker compose exec ollama ollama pull qwen2.5:7b-instruct`.
+The Ollama model pull is a separate setup step; it is not baked into the engine image.
+CPU execution is the default. GPU use requires a local Compose override.
 
 **Method 2: Local Development Setup**
 If you prefer to run the components separately for development:
@@ -98,14 +108,30 @@ npm run dev
 ```
 
 ### Observability
-PRISM is equipped with a 100% trace-coverage invariant suite. Every chunk decision, retrieval event, and graph mutation is logged to `events.jsonl`.
-For a visual dashboard, an OpenTelemetry + Prometheus + Grafana stack is available:
-```bash
-docker compose --profile obs up -d
-```
+PRISM emits structured telemetry for controller decisions, retrieval and graph changes to `events.jsonl`. Full trace coverage has not been established by a larger streaming evaluation.
+For a visual dashboard, the OpenTelemetry + Prometheus + Grafana stack is now bundled and starts automatically when using `.\start.ps1` or `docker compose up -d`.
 
 ## Documentation
 - `markdowns/globals/01_OBJECTIVES_AND_REQUIREMENTS.md`: The core requirements.
 - `AGENTS.md`: Guidelines for AI agents working within this repository.
-- `System_Architecture_Brief.md`: Deliverable 2.
-- `Benchmarking_and_Evaluation_Report.md`: Deliverable 3.
+- [System Architecture Brief](./SYSTEM_ARCHITECTURE.md): Deliverable 2.
+- [Benchmarking & Evaluation Report](./BENCHMARK+EVAL.md): Deliverable 3.
+
+## Verification commands
+
+`make test-golden` runs the self-correction golden and held-out sensor tests.
+`make test` runs all available tests. `make serve` starts the local backend;
+`make down` stops the container stack. Use `make help` for supported targets.
+On Windows without Make, use `python -m pytest -q` or
+`python -m pytest -q tests/test_golden_streaming.py tests/synth/test_heldout.py`.
+Override `PYTHON` when your installed dependencies are outside `.venv`, for example
+`make test PYTHON=python`.
+
+`make bench-c4` is an alias for the available golden and held-out checks.
+The stale ablation targets have been removed because their helper and scenario
+fixtures are missing from this checkout. `make score RUN=... CORPUS=...` remains
+available for scoring real answered-turn records.
+
+The golden regression uses deterministic embeddings and extractive synthesis.
+It checks supersession, exclusion of withdrawn evidence, verified citations and
+schema validity; it does not establish streaming gate rates or live model latency.

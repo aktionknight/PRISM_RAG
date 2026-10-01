@@ -3,7 +3,7 @@ FROM node:20-slim AS ui-build
 WORKDIR /app/ui
 # We copy package files first for caching
 COPY ui/package.json ui/package-lock.json* ./
-RUN npm install
+RUN npm ci
 COPY ui/ ./
 RUN npm run build
 
@@ -20,17 +20,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Python deps
 COPY pyproject.toml .
 COPY src/ src/
-RUN pip install --no-cache-dir -e ".[dev,nli]" 2>/dev/null || pip install --no-cache-dir .
+RUN pip install --no-cache-dir -e ".[dev,nli]"
 
-# Bake spaCy model
-RUN python -m spacy download en_core_web_sm 2>/dev/null || true
+# Bake language resources and NLI to the configured disk paths. Fail the build
+# if any required download or label-order check fails.
+COPY config/ config/
+COPY scripts/bake_nli_model.py scripts/bake_nli_model.py
+RUN python scripts/bake_nli_model.py --nltk --spacy
+RUN python scripts/bake_nli_model.py --nltk --spacy --check
 
-# NLTK data
-RUN python -c "import nltk; nltk.download('punkt_tab', quiet=True); nltk.download('stopwords', quiet=True); nltk.download('wordnet', quiet=True)" 2>/dev/null || true
+# Retrieval loads model IDs from config; preserve their HF cache in the image.
+ENV HF_HOME=/app/models/huggingface
+RUN python -c "import yaml; from sentence_transformers import SentenceTransformer; from transformers import AutoTokenizer, AutoModelForSequenceClassification; c=yaml.safe_load(open('config/retrieval.yaml')); SentenceTransformer(c['embedding']['model_name']); r=c['reranker']['model_name']; AutoTokenizer.from_pretrained(r); AutoModelForSequenceClassification.from_pretrained(r)"
+ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 NLTK_DATA=/app/models/nltk_data
 
 # Copy other resources
-COPY config/ config/
 COPY bench/ bench/
+COPY tests/ tests/
 COPY corpus/ corpus/
 COPY Makefile .
 

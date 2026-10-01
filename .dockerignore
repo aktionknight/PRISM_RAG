@@ -1,0 +1,17 @@
+.git
+.venv
+.pytest_cache
+**/__pycache__
+**/*.pyc
+**/node_modules
+ui/dist
+models
+.index
+runs
+scratch
+data
+grafana-bin
+prometheus-bin
+*.zip
+.env
+*.log

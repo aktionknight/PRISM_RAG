@@ -1,63 +1,67 @@
-# Deliverable 3: Benchmarking & Evaluation Report
+﻿# Deliverable 3: Benchmarking & Evaluation Report
 
 **Project:** Streaming Live RAG (PRISM)
-**Date:** September 2026
+**Date:** October 2026
 
----
+## Measurement status
 
-## 1. Quantitative Performance (vs. Baseline)
+No reproducible larger streaming evaluation set, baseline outputs, or per-utterance
+run artifacts support the previously reported performance figures. Those figures
+have been removed, including the G2 early retrieval rate, G3 sub-intent recall,
+G4 citation support rate, retrieval lead time, false triggers, refinement retention,
+context token savings, full-corpus-search rate, and A1/A2 ablation results.
 
-The implementation was benchmarked against the standard baseline RAG pipeline on the synthetic streaming dev set (150 WPM chunking rate). The system demonstrated a structural advantage in retrieval lead time, token efficiency, and citation support rates.
+G2, G3 and G4 are **not measured on a larger held-out streaming set** in this
+report. Architecture targets and small regression tests are not empirical gate
+results. The repository does not establish a baseline comparison or an overall
+pass verdict for these gates.
 
-| Metric | Baseline Pipeline | Streaming PRISM RAG | Delta / Improvement |
-| :--- | :--- | :--- | :--- |
-| **Early Retrieval Rate (G2)** | 0% (waits for end) | **92.4%** | +92.4% |
-| **Retrieval Lead Time** | -200 ms (lag) | **~850 ms** (before utterance end) | +1.05s |
-| **False Trigger Rate (P1)** | N/A | **3.8%** | acceptable overhead |
-| **Sub-Intent Recall (G3)** | 71.0% | **94.5%** | +23.5% |
-| **Citation Support Rate (G4)**| 82.3% | **99.7%** | +17.4% (near perfect grounding) |
-| **Claims Retained on Refine** | 0% (full restart) | **76%** | - |
-| **Context Tokens per Turn** | 4,200 | **1,850** (quota-bounded) | -56% |
-| **Full Corpus Searches (Refine)** | 100% | **0%** (Pool-first resolution) | -100% (G5 met) |
+## Available verification
 
----
+Run the actual tests with:
 
-## 2. Architectural Ablation Experiments
+```bash
+python -m pytest -q tests/test_golden_streaming.py tests/synth/test_heldout.py
+python -m pytest -q
+```
 
-### Ablation A1: Hybrid (Facet-Routed) vs. Dense-Only Retrieval
-**Hypothesis:** Dense-only retrieval will underperform on policy and eligibility questions due to its inability to capture exact numerical boundaries and specific qualifiers, whereas our Facet-Routed Hybrid Weighting (S-8) will dynamically balance the two.
+The self-correction golden uses sensor-maintenance vocabulary, unrelated to the
+brief's examples. It submits a 12-month calibration intent, marks it dispatched,
+then submits a correction to 24 months. The test checks that the earlier intent is
+superseded and linked to its replacement, while both remain in session history.
+It passes the final active scope and both evidence bundles to the real synthesis
+engine using its extractive backend and verifies that only the 24-month claim and
+its allowed citation appear in a schema-valid answer. Additive requests, duplicate
+requests and different-facet requests have separate assertions.
 
-**Results (nDCG@10):**
-- **Dense-Only (`bge-small`):** 0.74 overall (0.61 on Policy facets, 0.88 on Descriptive facets)
-- **BM25-Only:** 0.69 overall (0.83 on Policy facets, 0.52 on Descriptive facets)
-- **Facet-Routed Hybrid (Winner):** **0.89 overall** (0.87 Policy, 0.90 Descriptive)
+The embedding boundary is deterministic; decomposition candidates and evidence
+are supplied by the test. These checks do not measure the controller's early
+trigger timing, live LLM decomposition quality, full WebSocket routing, or the
+statistical citation support rate. No runtime mechanism was tuned to this fixture.
 
-**Conclusion:** The hybrid approach overwhelmingly dominates. By defining facet-specific weights in `config/retrieval.yaml`, we allow the system to apply higher sparse-weighting to policy questions (where exact matching matters) and higher dense-weighting to descriptive queries. 
+The held-out suite separately checks paraphrase grounding, rejection of invented
+numbers and polarity reversals, intent retirement, answer scope and telemetry.
 
-### Ablation A2: Rule-Based Cascade vs. Model-Based Controller
-**Hypothesis:** A fully model-based intent classifier is too slow for per-chunk processing and violates the parsimony constraint (HC-5) without offering a significant early-trigger advantage over a well-calibrated BM25 discriminativeness probe (S-1).
+`bench.metrics` can score caller-supplied answered-turn records and corpus chunks:
 
-**Results:**
-- **Model-Based Controller (Llama-3.2 1B JSON):** Early Trigger Rate: 94%, False Trigger: 2%, Latency: ~120 ms/chunk
-- **Cascade (BM25 Probe + Heuristics + Fallback):** Early Trigger Rate: 92%, False Trigger: 3.8%, Latency: **~5 ms/chunk**
+```bash
+make score RUN=runs/answers.jsonl CORPUS=runs/chunks.jsonl
+```
 
-**Conclusion:** The 5-stage Cascade was selected. While the model-based controller slightly improves the false trigger rate, its 120 ms latency is unworkable for real-time streaming chunks arriving every ~200-400 ms. The Cascade provides >90% early triggers in <10 ms. The false triggers generated by the Cascade are rendered harmless by the Speculative Execution framework (S-7), which cancels erroneous branches before they pollute the context window.
+Controller-only replay output cannot be used as answered-turn records. Legacy
+`bench.replay_c4` and `bench.ablate_refinement` currently refer to missing
+`tests.helpers` and golden fixture files; their historical descriptions are not
+proof of runnable evaluations in this checkout.
 
----
+## Requirements for future reported results
 
-## 3. Analyzed Edge-Case Failures & Mitigations
+A future G2/G3/G4 report needs a versioned held-out corpus and larger utterance
+set, streaming chunk timestamps, independently defined gold intent labels and
+citation judgements, a reproducible invocation, model/configuration versions,
+hardware details, baseline outputs and raw run artifacts. Report denominators,
+metric definitions and failure cases alongside the aggregates. Keep test fixtures
+separate from threshold selection and corpus-derived runtime configuration.
 
-### Edge Case 1: Over-Fragmentation of Synonymous Conjunctive Phrases
-**Failure:** The utterance *"What are the cancellation and refund terms?"* was initially decomposed into two separate intents by the syntactic parser: `[cancellation terms]` and `[refund terms]`. This caused double-retrieval (P5 pitfall) and inflated the context window.
-**Analysis:** Both terms map to the exact same corpus section (`venue_policy`). 
-**Mitigation:** Implemented **Retrieval-Overlap Anti-Fragmentation (S-3)**. After dispatching parallel retrievals, the system checks the Jaccard overlap of the top-10 chunks. Since the overlap exceeded 0.7, the system automatically merged the intents post-hoc and united their evidence, mitigating the pitfall without requiring complex LLM semantic parsing.
-
-### Edge Case 2: Unverified Numeric Hallucinations During Generation
-**Failure:** During late-constraint refinement, the LLM attempted to synthesize a capacity limit, outputting *"Venue A holds 50 people"* when the context strictly stated 30. Standard verification thresholds passed because the sentence shared high semantic similarity with the context.
-**Analysis:** NLI and cosine-similarity verification fail to strictly constrain numerical values.
-**Mitigation:** Implemented the **Numeric/Entity Copy Check**. Before a provisional sentence is committed in the Two-Pass Streaming engine, we extract all numerals, dates, and proper nouns. If any extracted numeral does not exist in the cited chunks, the sentence is instantly demoted to the `uncertainty` block.
-
-### Edge Case 3: "Empty" Refinement Stalls
-**Failure:** The user says *"Wait, what about for 50 people?"*. The intent decomposer correctly identified a `venue_capacity` refinement, but the new query generated a completely empty BM25 and Dense result set (no venue supports 50 people).
-**Analysis:** Standard RAG pipelines treat an empty retrieval as a catastrophic failure, causing the LLM to either hallucinate or crash.
-**Mitigation:** Implemented the **Coverage Matrix (S-10)**. When a sub-intent fails to retrieve entailed evidence crossing the minimum score floor ($h_{lo}$), the intent is flagged as `uncovered`. The synthesis engine systematically routes this to the `uncertainty` data structure, cleanly outputting: *"Information regarding capacity for 50 people could not be verified from the retrieved corpus."*
+Docker Compose execution and a clean-machine deployment check were not performed
+for this change, as requested. Image build instructions bake the model resources,
+but build success and offline container startup remain unverified.
