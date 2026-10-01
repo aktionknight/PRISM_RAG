@@ -13,6 +13,8 @@ follow the instructions for Starting up, Recommended Ollama + atleast 4GB VRAM f
 
 Run the project with : .\start.ps1 (from project root) or follow steps in the README below
 
+(THE RERANKING CODE EXISTS BUT IS NOT WIRED IN DUE TO EXTREME PERFORMANCE ISSUES ON DEV PC WHILE TESTING, FULL PRODUCTION CODE SHOULD WORK WELL WITH THE RERANKER AND HYBRID RETRIEVAL)
+
 ## Key Features
 
 - **Speculative Retrieval Cascade:** A 5-stage early-exit controller uses a BM25 discriminativeness probe to start retrieval before the sentence finishes. Cancelled branches can populate the evidence pool for reuse.
